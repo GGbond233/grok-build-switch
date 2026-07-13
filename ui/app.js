@@ -28,6 +28,16 @@ const TEMPLATES = {
     models: [],
     available_models: [],
   },
+  responses: {
+    name: "OpenAI Responses",
+    upstream_format: "openai_responses",
+    base_url: "https://api.openai.com/v1",
+    default_model: "",
+    web_search_model: "",
+    subagents_default_model: "",
+    models: [],
+    available_models: [],
+  },
   anthropic: {
     name: "Anthropic",
     upstream_format: "anthropic",
@@ -38,28 +48,18 @@ const TEMPLATES = {
     models: [],
     available_models: [],
   },
-  ollama: {
-    name: "Ollama 本地",
-    upstream_format: "openai_chat",
-    base_url: "http://127.0.0.1:11434/v1",
-    api_key: "ollama",
-    default_model: "",
-    web_search_model: "",
-    subagents_default_model: "",
-    models: [],
-    available_models: [],
-  },
-  openrouter: {
-    name: "OpenRouter",
-    upstream_format: "openai_chat",
-    base_url: "https://openrouter.ai/api/v1",
-    default_model: "",
-    web_search_model: "",
-    subagents_default_model: "",
-    models: [],
-    available_models: [],
-  },
 };
+
+const TEMPLATE_KEYS = new Set(["custom", ...Object.keys(TEMPLATES)]);
+
+function newProfileDraft() {
+  return {
+    template: "responses",
+    upstream_format: "openai_responses",
+    models: [],
+    available_models: [],
+  };
+}
 
 async function api(path, options = {}) {
   const res = await fetch(path, {
@@ -516,7 +516,7 @@ function renderSettings(settings) {
 }
 
 function openEdit(profile) {
-  fillForm(profile || { models: [], available_models: [], upstream_format: "openai_chat" });
+  fillForm(profile || newProfileDraft());
   // Keep advanced sections collapsed by default for a simple add flow.
   if ($("connectBlock")) $("connectBlock").open = false;
   if ($("configPreviewBlock")) $("configPreviewBlock").open = false;
@@ -532,7 +532,7 @@ function fillForm(profile) {
   $("baseUrl").value = profile.base_url || "";
   $("profileApiKey").value = profile.api_key || firstModelKey(profile) || "";
   $("upstreamFormat").value = upstreamFormatValue(profile.upstream_format);
-  $("templateSelect").value = "";
+  $("templateSelect").value = templateValue(profile);
   state.availableModels = unique([
     ...(profile.available_models || []),
     ...(profile.models || []).map((model) => model.name || model.model),
@@ -559,6 +559,7 @@ function applyTemplate(key) {
   fillForm({
     id: $("profileId").value,
     name: keepName || tpl.name,
+    template: key,
     upstream_format: tpl.upstream_format,
     base_url: tpl.base_url,
     api_key: keepKey || tpl.api_key || "",
@@ -570,6 +571,16 @@ function applyTemplate(key) {
   });
   $("templateSelect").value = key;
   toast(`已套用「${tpl.name}」地址与协议，请自行启用模型`, "info");
+}
+
+function templateValue(profile) {
+  if (TEMPLATE_KEYS.has(profile.template)) return profile.template;
+  // Older profiles did not persist their selected template. Recover the
+  // closest template from the protocol while defaulting new profiles to Responses.
+  if (!profile.id && !profile.name && !profile.base_url) return "responses";
+  if (profile.upstream_format === "openai_responses" || profile.upstream_format === "responses") return "responses";
+  if (profile.upstream_format === "anthropic" || profile.upstream_format === "messages") return "anthropic";
+  return "openai";
 }
 
 function copyProfile(profile) {
@@ -588,6 +599,7 @@ function copyProfile(profile) {
 function stripSecrets(profile, includeKey) {
   const out = {
     name: profile.name,
+    template: profile.template || templateValue(profile),
     upstream_format: profile.upstream_format,
     base_url: profile.base_url,
     default_model: profile.default_model,
@@ -839,7 +851,7 @@ function addModelCard(model = {}) {
   backendSelect.addEventListener("change", () => {
     backendSelect.dataset.touched = "1";
   });
-  card.querySelector('[data-field="supports_backend_search"]').checked = !!model.supports_backend_search;
+  card.querySelector('[data-field="supports_backend_search"]').checked = model.supports_backend_search ?? true;
   card.querySelector('[data-field="extra_headers"]').value = serializeHeaders(model.extra_headers);
   const nameInput = card.querySelector('[data-field="name"]');
   const modelInput = card.querySelector('[data-field="model"]');
@@ -925,6 +937,7 @@ function readForm() {
   return {
     id: $("profileId").value,
     name: $("name").value.trim(),
+    template: $("templateSelect").value || "responses",
     upstream_format: $("upstreamFormat").value,
     base_url: $("baseUrl").value.trim(),
     api_key: apiKey,
@@ -1005,8 +1018,8 @@ $("navHomeBtn").onclick = () => showView("home");
 $("navSettingsBtn").onclick = () => showView("settings");
 $("backFromEditBtn").onclick = () => showView("home");
 $("backFromSettingsBtn").onclick = () => showView("home");
-$("addBtn").onclick = () => openEdit({ models: [], available_models: [], upstream_format: "openai_chat" });
-$("emptyNewBtn").onclick = () => openEdit({ models: [], available_models: [], upstream_format: "openai_chat" });
+$("addBtn").onclick = () => openEdit(newProfileDraft());
+$("emptyNewBtn").onclick = () => openEdit(newProfileDraft());
 $("emptyImportBtn").onclick = () => importCurrentConfig($("emptyImportBtn"));
 $("importHeaderBtn").onclick = () => importCurrentConfig($("importHeaderBtn"));
 $("reapplyBtn").onclick = () => {
@@ -1063,9 +1076,10 @@ if ($("layoutListBtn")) {
 
 // Edit form
 $("templateSelect").onchange = () => {
-  if ($("templateSelect").value) applyTemplate($("templateSelect").value);
+  const key = $("templateSelect").value;
+  if (key !== "custom") applyTemplate(key);
 };
-$("cancelBtn").onclick = () => fillForm({ models: [], available_models: [], upstream_format: "openai_chat" });
+$("cancelBtn").onclick = () => fillForm(newProfileDraft());
 $("upstreamFormat").onchange = syncModelBackends;
 $("copyProfileBtn").onclick = () => {
   const current = readForm();

@@ -88,11 +88,10 @@
           </label>
           <label class="field">类型模板
             <select id="templateSelect">
-              <option value="">自定义</option>
+              <option value="responses">OpenAI Responses</option>
+              <option value="custom">自定义</option>
               <option value="openai">OpenAI 兼容</option>
               <option value="anthropic">Anthropic</option>
-              <option value="ollama">Ollama 本地</option>
-              <option value="openrouter">OpenRouter</option>
             </select>
           </label>
           <label class="field span2">服务地址
@@ -112,6 +111,7 @@
             <div class="inlineActions">
               <button type="button" id="testConnectionBtn" class="btn sm">测试上游连接</button>
               <button type="button" id="fetchModelsBtn" class="btn sm">拉取模型列表</button>
+              <button type="button" id="privacyProtectBtn" class="btn sm">保护隐私安全</button>
               <p id="connectionStatus" class="connStatus" hidden></p>
             </div>
             <p class="muted tiny">拉取列表后点 chip 启用；不会自动设置默认模型。每个已启用模型可单独测试连通。</p>
@@ -161,7 +161,6 @@
             <button type="button" id="exportProfileBtn" class="btn sm">导出 JSON</button>
             <button type="button" id="importProfileJsonBtn" class="btn sm">导入 JSON</button>
             <button type="button" id="importBtn" class="btn sm">从 config 导入</button>
-            <button type="button" id="privacyProtectBtn" class="btn sm">保护隐私安全</button>
             <button type="button" id="cancelBtn" class="btn sm ghost">清空</button>
           </div>
           <input type="file" id="importProfileFile" accept="application/json,.json" hidden>
