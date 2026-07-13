@@ -1,0 +1,172 @@
+name: Build macOS ARM64
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - "docs/**"
+      - "mkdocs.yml"
+      - "requirements-docs.txt"
+
+permissions:
+  contents: read
+
+jobs:
+  build-macos-arm64:
+    name: Build macOS Apple Silicon
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Show build environment
+        run: |
+          echo "Architecture:"
+          uname -m
+
+          echo "macOS version:"
+          sw_vers
+
+          echo "Go version:"
+          go version
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run tests
+        run: go test ./...
+
+      - name: Build ARM64 executable
+        env:
+          CGO_ENABLED: "1"
+          GOOS: darwin
+          GOARCH: arm64
+        run: |
+          mkdir -p dist
+
+          go build \
+            -trimpath \
+            -ldflags="-s -w" \
+            -o dist/grok_switch \
+            .
+
+          chmod +x dist/grok_switch
+
+          echo "Build result:"
+          file dist/grok_switch
+
+      - name: Create macOS application
+        run: |
+          PACKAGE_DIR="dist/grok-build-switch-macos-arm64"
+          APP_DIR="$PACKAGE_DIR/Grok Build Switch.app"
+
+          mkdir -p "$APP_DIR/Contents/MacOS"
+
+          cp dist/grok_switch "$APP_DIR/Contents/MacOS/grok_switch"
+          chmod +x "$APP_DIR/Contents/MacOS/grok_switch"
+
+          cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleName</key>
+              <string>Grok Build Switch</string>
+
+              <key>CFBundleDisplayName</key>
+              <string>Grok Build Switch</string>
+
+              <key>CFBundleIdentifier</key>
+              <string>com.ggbond233.grok-build-switch</string>
+
+              <key>CFBundleExecutable</key>
+              <string>grok_switch</string>
+
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+
+              <key>CFBundleShortVersionString</key>
+              <string>1.0.0</string>
+
+              <key>CFBundleVersion</key>
+              <string>1</string>
+
+              <key>LSMinimumSystemVersion</key>
+              <string>12.0</string>
+
+              <key>LSUIElement</key>
+              <true/>
+
+              <key>NSHighResolutionCapable</key>
+              <true/>
+          </dict>
+          </plist>
+          PLIST
+
+          cp dist/grok_switch "$PACKAGE_DIR/grok_switch"
+
+          cat > "$PACKAGE_DIR/使用说明.txt" <<'EOF'
+          Grok Build Switch macOS ARM64版
+
+          一、正常启动
+
+          双击“Grok Build Switch.app”。
+
+          程序启动后会显示在Mac顶部菜单栏，并打开本地管理页面。
+
+          二、无托盘模式
+
+          打开终端，进入本目录后运行：
+
+          chmod +x ./grok_switch
+          ./grok_switch -no-tray
+
+          然后访问：
+
+          http://127.0.0.1:17878
+
+          三、macOS提示无法验证开发者
+
+          在当前目录打开终端，运行：
+
+          xattr -dr com.apple.quarantine "Grok Build Switch.app"
+
+          然后重新打开应用。
+          EOF
+
+          codesign \
+            --force \
+            --deep \
+            --sign - \
+            "$APP_DIR"
+
+          ditto \
+            -c \
+            -k \
+            --sequesterRsrc \
+            --keepParent \
+            "$PACKAGE_DIR" \
+            "dist/grok-build-switch-macos-arm64.zip"
+
+      - name: Verify package
+        run: |
+          ls -lah dist
+          unzip -l dist/grok-build-switch-macos-arm64.zip
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: grok-build-switch-macos-arm64
+          path: dist/grok-build-switch-macos-arm64.zip
+          if-no-files-found: error
+          retention-days: 30
