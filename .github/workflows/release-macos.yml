@@ -1,0 +1,99 @@
+name: Build and Release macOS ARM64
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "版本号，例如v1.0.0"
+        required: true
+        default: "v1.0.0"
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build macOS Apple Silicon
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Show build environment
+        run: |
+          uname -m
+          sw_vers
+          go version
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run tests
+        run: go test ./...
+
+      - name: Build macOS ARM64 executable
+        env:
+          CGO_ENABLED: "1"
+          GOOS: darwin
+          GOARCH: arm64
+        run: |
+          mkdir -p dist
+
+          go build \
+            -trimpath \
+            -ldflags="-s -w" \
+            -o dist/grok_switch \
+            .
+
+          chmod +x dist/grok_switch
+          file dist/grok_switch
+
+      - name: Package executable
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          ZIP_NAME="grok-build-switch-${VERSION}-macos-arm64.zip"
+
+          ditto \
+            -c \
+            -k \
+            --keepParent \
+            dist/grok_switch \
+            "dist/${ZIP_NAME}"
+
+          shasum -a 256 "dist/${ZIP_NAME}" > "dist/${ZIP_NAME}.sha256"
+
+          ls -lah dist
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          if gh release view "${VERSION}" >/dev/null 2>&1; then
+            echo "Release ${VERSION} 已存在，更新安装包"
+
+            gh release upload "${VERSION}" \
+              dist/*.zip \
+              dist/*.sha256 \
+              --clobber
+          else
+            echo "创建Release ${VERSION}"
+
+            gh release create "${VERSION}" \
+              dist/*.zip \
+              dist/*.sha256 \
+              --target "${GITHUB_SHA}" \
+              --title "${VERSION}" \
+              --generate-notes \
+              --latest
+          fi
