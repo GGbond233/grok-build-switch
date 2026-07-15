@@ -7,9 +7,12 @@
 ## 功能
 
 - 供应商增删改查：名称、Base URL、API Key、上游格式、默认 / 联网 / Subagents 模型、已启用模型列表
+- 供应商默认使用 `high` 推理强度；每个模型自动写入 `supports_reasoning_effort = true` 和 `low/medium/high` 支持列表
 - 一键启用：写入 `[endpoints]`、`[models]`、`[subagents].default_model` 与 `[model.*]`，其它段尽量保留
 - 切换 / 保存 config 前自动备份；设置页可还原备份、直接编辑 `config.toml`
 - 首次运行可从当前 `config.toml` 导入 Default 供应商
+- 导入 CPA `xai-*.json` 或 Grok CLI `auth.json`，由内嵌代理提供稳定的本地 URL/key 并自动刷新 token
+- Grok 多账号池：批量导入、定时自动巡检、健康分类、坏号自动隔离、健康号轮换与单账号回退
 - Web UI 仅监听 `127.0.0.1`（默认端口 `17878`，被占用时自动递增）
 - 可设置Windows 开机自启
 - 托盘菜单：快速切换、打开面板、复制地址、打开数据/日志目录
@@ -50,6 +53,16 @@
 3. **查看生效配置**：设置 → `config.toml` 编辑区（磁盘上只有一份生效配置；各供应商档案在本地 profiles 中）
 4. **说明**：切换后**不会**结束已运行的 grok 会话；**新开**的 grok 会话才会读新 config
 
+### Grok Auth 与号池
+
+1. 打开 **设置 → Grok Auth JSON**，可导入单个 CPA `xai-*.json` 或 `%USERPROFILE%\.grok\auth.json`；该入口与下方自动巡检使用同一个号池。
+2. 需要多账号时，在 **Grok 号池自动巡检** 中一次选择多个 JSON，或用“选择目录导入”递归读取目录及子目录中的全部 `.json`；原文件不会被移动。
+3. 默认导入后立即巡检，之后每 6 小时自动巡检一次；可调整为 30–1440 分钟，并设置 1–16 并发。
+4. 巡检确认权限拒绝、免费额度用尽或认证失效后，该账号会退出代理可用集合；普通 429/网络异常不会被误隔离。
+5. 账号卡片会显示 HTTP 状态、错误码和具体探测错误；可批量禁用或删除所有“已巡检且非健康”的异常账号，待巡检账号不会被处理。
+6. 自动巡检不会自动删除账号。手动禁用、启用、单个删除和批量操作均在设置页完成。
+7. 无法直连 xAI 时，可填写 HTTP/HTTPS/SOCKS5 代理，例如 `http://127.0.0.1:7890`；该设置同时用于巡检、token 刷新和号池实时转发。
+
 ### 环境变量
 
 | 变量 | 说明 |
@@ -67,6 +80,9 @@
 | `%USERPROFILE%\.grok_switch\profiles.json` | 供应商档案（**含 API Key 明文**） |
 | `%USERPROFILE%\.grok_switch\backups\` | config 自动备份（**含 Key**） |
 | `%USERPROFILE%\.grok_switch\settings.json` | 本工具设置 |
+| `%USERPROFILE%\.grok_switch\grok_auth.json` | 单账号 xAI OAuth 凭据与本地代理 key（**敏感**） |
+| `%USERPROFILE%\.grok_switch\grok_pool\pool.json` | 号池展示状态与巡检/代理设置（不含 token；代理 URL 可能包含认证信息） |
+| `%USERPROFILE%\.grok_switch\grok_pool\accounts\` | 号池各账号 OAuth 凭据副本（**敏感**） |
 | `%USERPROFILE%\.grok_switch\grok_switch.log` | 日志 |
 
 ## 构建
@@ -131,6 +147,12 @@ docs/             # MkDocs 文档站
 ##
 
 [使用教程](https://1parado.github.io/grok-build-switch/)
+
+## 反馈群
+
+欢迎加入grok build switch 反馈群
+
+<img src="./QQ.jpg" alt="grok build switch 反馈群二维码" width="360">
 
 ## License
 

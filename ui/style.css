@@ -500,6 +500,109 @@ textarea:focus,
   gap: 8px;
 }
 
+.authKeyRow {
+  grid-template-columns: 1fr auto auto;
+}
+
+#grokAuthConnection {
+  display: grid;
+  gap: 12px;
+}
+
+#grokAuthConnection[hidden] {
+  display: none;
+}
+
+#grokPoolConnection {
+  display: grid;
+  gap: 12px;
+}
+
+#grokPoolConnection[hidden] {
+  display: none;
+}
+
+.poolSummary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.poolStat {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.poolStat strong,
+.poolStat span {
+  display: block;
+}
+
+.poolStat strong { font-size: 18px; }
+.poolStat span { margin-top: 2px; color: var(--muted); font-size: 11px; }
+
+.poolSettings {
+  display: grid;
+  grid-template-columns: auto minmax(110px, 1fr) minmax(90px, 1fr) auto;
+  align-items: end;
+  gap: 10px;
+}
+
+.poolSettings .check { min-height: 38px; }
+.poolProxyField { grid-column: 1 / -2; }
+
+.poolAccounts {
+  display: grid;
+  gap: 8px;
+}
+
+.poolAccount {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.poolAccountTop {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.poolAccountTitle { min-width: 0; }
+.poolAccountTitle strong { overflow-wrap: anywhere; }
+.poolAccountMeta { margin: 4px 0 0; color: var(--muted); font-size: 11px; }
+.poolAccountReason { margin: 8px 0 0; font-size: 12px; }
+.poolAccountError {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface));
+  color: var(--danger);
+  font-family: var(--mono);
+  font-size: 11px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.poolAccount.healthy { border-color: color-mix(in srgb, var(--success) 35%, var(--line)); }
+.poolAccount.quota_exhausted,
+.poolAccount.permission_denied,
+.poolAccount.reauth { border-color: color-mix(in srgb, var(--danger) 32%, var(--line)); }
+
+@media (max-width: 680px) {
+  .poolSummary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .poolSettings { grid-template-columns: 1fr 1fr; }
+  .poolSettings .check,
+  .poolSettings button { grid-column: 1 / -1; }
+  .poolProxyField { grid-column: 1 / -1; }
+  .authKeyRow { grid-template-columns: 1fr auto; }
+  .authKeyRow input { grid-column: 1 / -1; }
+}
+
 .inlineActions {
   display: flex;
   flex-wrap: wrap;

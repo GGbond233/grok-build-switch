@@ -24,6 +24,8 @@ import (
 
 	"grok_switch/internal/autostart"
 	grokconfig "grok_switch/internal/config"
+	"grok_switch/internal/grokauth"
+	"grok_switch/internal/grokpool"
 	"grok_switch/internal/paths"
 	"grok_switch/internal/profiles"
 	"grok_switch/internal/settings"
@@ -34,6 +36,8 @@ type Server struct {
 	Paths      paths.Paths
 	Profiles   *profiles.Store
 	Settings   *settings.Store
+	GrokAuth   *grokauth.Store
+	GrokPool   *grokpool.Manager
 	Switcher   *switcher.Switcher
 	Assets     embed.FS
 	ExePath    string
@@ -62,6 +66,9 @@ func (s *Server) Listen(preferred int) (*http.Server, int, error) {
 		return nil, 0, err
 	}
 	s.ActualPort = port
+	if err := s.ensureGrokAuthProfile(); err != nil {
+		fmt.Fprintf(os.Stderr, "grok auth profile: %v\n", err)
+	}
 	if err := s.Settings.SetActualPort(port); err != nil {
 		listener.Close()
 		return nil, 0, err
@@ -96,6 +103,14 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/config", s.handleConfig)
 	mux.HandleFunc("/api/config/preview", s.handleConfigPreview)
 	mux.HandleFunc("/api/config/privacy", s.handleConfigPrivacy)
+	mux.HandleFunc("/api/grok-auth", s.handleGrokAuth)
+	mux.HandleFunc("/api/grok-auth/refresh", s.handleGrokAuthRefresh)
+	mux.HandleFunc("/api/grok-pool", s.handleGrokPool)
+	mux.HandleFunc("/api/grok-pool/inspect", s.handleGrokPoolInspect)
+	mux.HandleFunc("/api/grok-pool/bulk", s.handleGrokPoolBulk)
+	mux.HandleFunc("/api/grok-pool/accounts/", s.handleGrokPoolAccount)
+	mux.HandleFunc("/grok/v1", s.handleGrokProxy)
+	mux.HandleFunc("/grok/v1/", s.handleGrokProxy)
 	mux.HandleFunc("/", s.handleStatic)
 }
 

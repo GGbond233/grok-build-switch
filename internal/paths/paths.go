@@ -11,8 +11,10 @@ type Paths struct {
 	DataDir      string
 	ProfilesFile string
 	SettingsFile string
+	GrokAuthFile string
+	GrokPoolDir  string
 	BackupsDir   string
-	LogFile       string
+	LogFile      string
 }
 
 func Resolve() (Paths, error) {
@@ -35,6 +37,8 @@ func Resolve() (Paths, error) {
 		DataDir:      dataDir,
 		ProfilesFile: filepath.Join(dataDir, "profiles.json"),
 		SettingsFile: filepath.Join(dataDir, "settings.json"),
+		GrokAuthFile: filepath.Join(dataDir, "grok_auth.json"),
+		GrokPoolDir:  filepath.Join(dataDir, "grok_pool"),
 		BackupsDir:   filepath.Join(dataDir, "backups"),
 		LogFile:      filepath.Join(dataDir, "grok_switch.log"),
 	}, nil

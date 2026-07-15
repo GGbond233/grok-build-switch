@@ -21,6 +21,10 @@ vendor/
 notes.md
 task_plan.md
 problems.md
+notes_*.md
+task_plan_*.md
+*-implementation.md
+
 # OS
 Thumbs.db
 Desktop.ini

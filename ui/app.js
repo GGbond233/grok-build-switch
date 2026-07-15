@@ -2,6 +2,8 @@ const state = {
   profiles: [],
   settings: null,
   status: null,
+  grokAuth: null,
+  grokPool: null,
   availableModels: [],
   backups: [],
   showAdvanced: false,
@@ -16,6 +18,7 @@ const OFFICIAL_PROVIDER_KEY = "official";
 const $ = (id) => document.getElementById(id);
 let toastTimer = null;
 let refreshTimer = null;
+let grokPoolPollTimer = null;
 
 const TEMPLATES = {
   openai: {
@@ -113,16 +116,20 @@ async function run(fn, { button, busyLabel, success } = {}) {
 }
 
 async function refreshAll() {
-  const [status, profiles, backups, settings] = await Promise.all([
+  const [status, profiles, backups, settings, grokAuth, grokPool] = await Promise.all([
     api("/api/status"),
     api("/api/profiles"),
     api("/api/backups"),
     api("/api/settings"),
+    api("/api/grok-auth"),
+    api("/api/grok-pool"),
   ]);
   state.status = status;
   state.profiles = profiles;
   state.backups = backups;
   state.settings = settings;
+  state.grokAuth = grokAuth;
+  state.grokPool = grokPool;
   // Coerce to strict boolean for UI.
   if (state.status && typeof state.status.config_matches_active !== "boolean") {
     state.status.config_matches_active = true;
@@ -132,6 +139,8 @@ async function refreshAll() {
   renderProfiles();
   renderBackups(backups);
   renderSettings(settings);
+  renderGrokAuth(grokAuth);
+  renderGrokPool(grokPool);
   syncAdvancedUI();
   const detail = [];
   if (state.status?.config_path) detail.push(state.status.config_path);
@@ -515,6 +524,181 @@ function renderSettings(settings) {
   }
 }
 
+function renderGrokAuth(auth) {
+  const configured = !!auth?.configured;
+  const badge = $("grokAuthBadge");
+  const connection = $("grokAuthConnection");
+  const status = $("grokAuthStatus");
+  if (badge) {
+    badge.textContent = configured ? (auth.needs_refresh ? "需要刷新" : "已配置") : "未配置";
+    badge.classList.toggle("active", configured && !auth.needs_refresh);
+  }
+  if (connection) connection.hidden = !configured;
+  if ($("grokAuthBaseUrl")) $("grokAuthBaseUrl").value = auth?.base_url || "";
+  if ($("grokAuthApiKey")) $("grokAuthApiKey").value = auth?.local_api_key || "";
+  if ($("activateGrokAuthBtn")) $("activateGrokAuthBtn").hidden = !configured;
+  if ($("refreshGrokAuthBtn")) $("refreshGrokAuthBtn").hidden = !auth?.single_configured || !!auth?.pool_accounts;
+  if ($("deleteGrokAuthBtn")) $("deleteGrokAuthBtn").hidden = !auth?.single_configured || !!auth?.pool_accounts;
+  if (!status) return;
+  if (!configured) {
+    status.textContent = "选择认证文件后，会生成稳定的本地 URL/key 和一个可直接启用的 Responses profile。";
+    return;
+  }
+  const detail = [];
+  if (auth.pool_accounts) detail.push(`统一号池 ${auth.pool_accounts} 个账号 · 已启用自动巡检`);
+  if (auth.email) detail.push(auth.email);
+  if (auth.expires_at) {
+    detail.push(`${auth.needs_refresh ? "已过期或即将过期" : "有效期至"} ${new Date(auth.expires_at).toLocaleString()}`);
+  }
+  if (auth.source && auth.source !== "unified-pool") {
+    detail.push(auth.source === "grok-auth-json" ? "Grok CLI auth.json" : "CPA xAI 凭据");
+  }
+  status.textContent = detail.join(" · ") || "凭据已配置";
+}
+
+const GROK_POOL_CLASS_LABELS = {
+  healthy: "健康",
+  permission_denied: "权限被拒",
+  quota_exhausted: "额度用尽",
+  reauth: "需重新登录",
+  model_unavailable: "模型不可用",
+  probe_error: "探测异常",
+  unknown: "未知",
+  uninspected: "待巡检",
+};
+
+function renderGrokPool(pool) {
+  clearTimeout(grokPoolPollTimer);
+  const configured = !!pool?.configured;
+  const summary = pool?.summary || {};
+  if ($("grokPoolBadge")) {
+    $("grokPoolBadge").textContent = `${summary.total || 0} 个账号 · ${summary.available || 0} 可用`;
+  }
+  if ($("grokPoolSummary")) {
+    $("grokPoolSummary").innerHTML = [
+      [summary.total || 0, "总账号"],
+      [summary.available || 0, "代理可用"],
+      [summary.healthy || 0, "健康"],
+      [summary.abnormal || 0, "异常"],
+    ].map(([value, label]) => `<div class="poolStat"><strong>${value}</strong><span>${label}</span></div>`).join("");
+  }
+  const settings = pool?.settings || {};
+  if ($("grokPoolAutoEnabled")) $("grokPoolAutoEnabled").checked = !!settings.enabled;
+  if ($("grokPoolInterval")) $("grokPoolInterval").value = settings.interval_minutes || 360;
+  if ($("grokPoolWorkers")) $("grokPoolWorkers").value = settings.workers || 4;
+  if ($("grokPoolProxyUrl")) $("grokPoolProxyUrl").value = settings.proxy_url || "";
+  if ($("grokPoolConnection")) $("grokPoolConnection").hidden = !configured;
+  if ($("grokPoolBaseUrl")) $("grokPoolBaseUrl").value = configured && state.status?.port
+    ? `http://127.0.0.1:${state.status.port}/grok/v1`
+    : "";
+  if ($("grokPoolApiKey")) $("grokPoolApiKey").value = pool?.local_api_key || "";
+  if ($("activateGrokPoolBtn")) $("activateGrokPoolBtn").hidden = !configured;
+  if ($("stopGrokPoolBtn")) $("stopGrokPoolBtn").hidden = !pool?.running;
+  if ($("inspectGrokPoolBtn")) {
+    $("inspectGrokPoolBtn").disabled = !configured || !!pool?.running;
+  }
+  const abnormalAccounts = (pool?.accounts || []).filter((account) => {
+    const classification = account.classification || "uninspected";
+    return classification !== "healthy" && classification !== "uninspected";
+  });
+  if ($("batchDisableGrokPoolBtn")) {
+    $("batchDisableGrokPoolBtn").disabled = !abnormalAccounts.some((account) => !account.disabled) || !!pool?.running;
+  }
+  if ($("batchDeleteGrokPoolBtn")) {
+    $("batchDeleteGrokPoolBtn").disabled = !abnormalAccounts.length || !!pool?.running;
+  }
+  if ($("grokPoolProgress")) {
+    const parts = [];
+    if (pool?.running) parts.push(`巡检中 ${pool.done || 0}/${pool.total || 0}`);
+    else if (pool?.last_run) parts.push(`上次巡检 ${new Date(pool.last_run).toLocaleString()}`);
+    else parts.push(configured ? "等待首次巡检" : "尚未导入号池账号");
+    if (!pool?.running && pool?.next_run) parts.push(`下次 ${new Date(pool.next_run).toLocaleString()}`);
+    if (pool?.last_error) parts.push(pool.last_error);
+    $("grokPoolProgress").textContent = parts.join(" · ");
+  }
+  renderGrokPoolAccounts(pool?.accounts || []);
+  if (pool?.running) {
+    grokPoolPollTimer = setTimeout(() => loadGrokPool().catch((err) => toast(err.message, "error")), 1500);
+  }
+}
+
+function renderGrokPoolAccounts(accounts) {
+  const container = $("grokPoolAccounts");
+  if (!container) return;
+  container.innerHTML = "";
+  if (!accounts.length) {
+    container.innerHTML = `<p class="muted tiny">可一次选择多个 CPA xai-*.json；也支持 Grok CLI auth.json。</p>`;
+    return;
+  }
+  accounts.forEach((account) => {
+    const classification = account.classification || "uninspected";
+    const el = document.createElement("div");
+    el.className = `poolAccount ${escapeAttr(classification)}`;
+    const title = account.email || account.file_name || account.id;
+    const inspected = account.last_inspected ? new Date(account.last_inspected).toLocaleString() : "未巡检";
+    const errorParts = [];
+    if (account.error_code) errorParts.push(`错误码：${account.error_code}`);
+    if (account.error_message) errorParts.push(`原因：${account.error_message}`);
+    const errorDetail = errorParts.length
+      ? `<p class="poolAccountError">${escapeHtml(errorParts.join("\n"))}</p>`
+      : "";
+    el.innerHTML = `
+      <div class="poolAccountTop">
+        <div class="poolAccountTitle">
+          <strong>${escapeHtml(title)}</strong>
+          <p class="poolAccountMeta">${escapeHtml(account.file_name || account.id)} · ${escapeHtml(account.model || "未选模型")} · ${escapeHtml(inspected)}</p>
+        </div>
+        <span class="badge">${account.disabled ? "手动禁用 · " : ""}${escapeHtml(GROK_POOL_CLASS_LABELS[classification] || classification)}</span>
+      </div>
+      <p class="poolAccountReason">${escapeHtml(account.reason || "等待巡检")}${account.http_status ? ` · HTTP ${account.http_status}` : ""}</p>
+      ${errorDetail}
+      <div class="inlineActions" style="margin-top:10px">
+        <button type="button" class="btn sm" data-action="toggle">${account.disabled ? "启用" : "禁用"}</button>
+        <button type="button" class="btn sm danger" data-action="delete">删除</button>
+      </div>
+    `;
+    const toggle = el.querySelector('[data-action="toggle"]');
+    toggle.onclick = () => run(async () => {
+      await api(`/api/grok-pool/accounts/${encodeURIComponent(account.id)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ disabled: !account.disabled }),
+      });
+      await loadGrokPool();
+    }, { button: toggle, busyLabel: "处理中…", success: account.disabled ? "账号已启用" : "账号已禁用" });
+    const remove = el.querySelector('[data-action="delete"]');
+    remove.onclick = () => run(async () => {
+      if (!confirm(`删除号池账号 ${title}？此操作会删除 grok_switch 保存的凭据副本。`)) return false;
+      await api(`/api/grok-pool/accounts/${encodeURIComponent(account.id)}`, { method: "DELETE" });
+      await refreshAll();
+    }, { button: remove, busyLabel: "删除中…", success: "号池账号已删除" });
+    container.appendChild(el);
+  });
+}
+
+async function loadGrokPool() {
+  state.grokPool = await api("/api/grok-pool");
+  renderGrokPool(state.grokPool);
+  return state.grokPool;
+}
+
+async function copyText(value, successMessage) {
+  if (!value) throw new Error("没有可复制的内容");
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+  } else {
+    const area = document.createElement("textarea");
+    area.value = value;
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.appendChild(area);
+    area.select();
+    const copied = document.execCommand("copy");
+    area.remove();
+    if (!copied) throw new Error("复制失败");
+  }
+  toast(successMessage, "success");
+}
+
 function openEdit(profile) {
   fillForm(profile || newProfileDraft());
   // Keep advanced sections collapsed by default for a simple add flow.
@@ -603,6 +787,7 @@ function stripSecrets(profile, includeKey) {
     upstream_format: profile.upstream_format,
     base_url: profile.base_url,
     default_model: profile.default_model,
+    default_reasoning_effort: profile.default_reasoning_effort || "high",
     web_search_model: profile.web_search_model,
     subagents_default_model: profile.subagents_default_model,
     available_models: profile.available_models || [],
@@ -614,6 +799,8 @@ function stripSecrets(profile, includeKey) {
         api_backend: m.api_backend,
         extra_headers: m.extra_headers || {},
         supports_backend_search: !!m.supports_backend_search,
+        supports_reasoning_effort: true,
+        reasoning_efforts: m.reasoning_efforts?.length ? m.reasoning_efforts : ["low", "medium", "high"],
         context_window: m.context_window || 0,
         max_completion_tokens: m.max_completion_tokens || 0,
       };
@@ -943,6 +1130,7 @@ function readForm() {
     api_key: apiKey,
     available_models: state.availableModels,
     default_model: $("defaultModel")?.value?.trim() || "",
+    default_reasoning_effort: "high",
     web_search_model: $("webSearchModel")?.value?.trim() || "",
     subagents_default_model: $("subagentsDefaultModel")?.value?.trim() || "",
     models: rows.map((row) => {
@@ -956,6 +1144,8 @@ function readForm() {
         api_backend: row.querySelector('[data-field="api_backend"]')?.value || apiBackendFor($("upstreamFormat").value),
         extra_headers: parseHeaders(row.querySelector('[data-field="extra_headers"]')?.value || ""),
         supports_backend_search: !!row.querySelector('[data-field="supports_backend_search"]')?.checked,
+        supports_reasoning_effort: true,
+        reasoning_efforts: ["low", "medium", "high"],
         context_window: num("context_window"),
         max_completion_tokens: num("max_completion_tokens"),
       };
@@ -1215,6 +1405,203 @@ $("settingsForm").onsubmit = (event) => {
     await refreshAll();
   }, { button: $("saveSettingsBtn"), busyLabel: "保存中…", success: "设置已保存" });
 };
+
+$("importGrokAuthBtn").onclick = () => $("grokAuthFile").click();
+$("grokAuthFile").onchange = async (event) => {
+  const file = event.target.files?.[0];
+  event.target.value = "";
+  if (!file) return;
+  await run(async () => {
+    const result = await api("/api/grok-auth", {
+      method: "POST",
+      body: await file.text(),
+    });
+    await refreshAll();
+    if (result.warning) {
+      toast(result.warning, "error");
+      return false;
+    }
+  }, {
+    button: $("importGrokAuthBtn"),
+    busyLabel: "导入中…",
+    success: "Grok auth 已导入统一号池，已进入自动巡检",
+  });
+};
+
+$("importGrokAuthDirBtn").onclick = () => $("grokAuthDirectory").click();
+$("grokAuthDirectory").onchange = async (event) => {
+  const files = [...(event.target.files || [])].filter((file) => file.name.toLowerCase().endsWith(".json"));
+  event.target.value = "";
+  if (!files.length) {
+    toast("所选目录中没有 JSON 文件", "error");
+    return;
+  }
+  await importGrokPoolFiles(files, $("importGrokAuthDirBtn"));
+};
+
+$("toggleGrokAuthKeyBtn").onclick = () => {
+  const input = $("grokAuthApiKey");
+  input.type = input.type === "password" ? "text" : "password";
+  $("toggleGrokAuthKeyBtn").textContent = input.type === "password" ? "显示" : "隐藏";
+};
+
+$("copyGrokAuthUrlBtn").onclick = () => run(
+  () => copyText($("grokAuthBaseUrl").value, "Base URL 已复制"),
+  { button: $("copyGrokAuthUrlBtn") },
+);
+
+$("copyGrokAuthKeyBtn").onclick = () => run(
+  () => copyText($("grokAuthApiKey").value, "本地 API Key 已复制"),
+  { button: $("copyGrokAuthKeyBtn") },
+);
+
+$("refreshGrokAuthBtn").onclick = () => run(async () => {
+  await api("/api/grok-auth/refresh", { method: "POST" });
+  await refreshAll();
+}, {
+  button: $("refreshGrokAuthBtn"),
+  busyLabel: "刷新中…",
+  success: "xAI token 已刷新",
+});
+
+$("activateGrokAuthBtn").onclick = () => {
+  const profile = state.profiles.find((item) => item.name === "Grok Auth（本地代理）");
+  if (!profile) {
+    toast("没有找到本地 Grok profile，请重新导入 JSON", "error");
+    return;
+  }
+  activateProfile(profile.id, $("activateGrokAuthBtn"), profile.name);
+};
+
+$("deleteGrokAuthBtn").onclick = () => run(async () => {
+  if (!confirm("删除已导入的 Grok OAuth 凭据和本地代理 profile？")) return false;
+  await api("/api/grok-auth", { method: "DELETE" });
+  $("grokAuthApiKey").type = "password";
+  $("toggleGrokAuthKeyBtn").textContent = "显示";
+  await refreshAll();
+}, {
+  button: $("deleteGrokAuthBtn"),
+  busyLabel: "删除中…",
+  success: "Grok auth 已删除",
+});
+
+$("grokPoolSettingsForm").onsubmit = (event) => {
+  event.preventDefault();
+  run(async () => {
+    state.grokPool = await api("/api/grok-pool", {
+      method: "PUT",
+      body: JSON.stringify({
+        enabled: $("grokPoolAutoEnabled").checked,
+        interval_minutes: Number($("grokPoolInterval").value || 360),
+        workers: Number($("grokPoolWorkers").value || 4),
+        proxy_url: $("grokPoolProxyUrl").value.trim(),
+      }),
+    });
+    renderGrokPool(state.grokPool);
+  }, { button: $("saveGrokPoolSettingsBtn"), busyLabel: "保存中…", success: "号池巡检设置已保存" });
+};
+
+$("importGrokPoolBtn").onclick = () => $("grokPoolFiles").click();
+$("grokPoolFiles").onchange = async (event) => {
+  const files = [...(event.target.files || [])];
+  event.target.value = "";
+  await importGrokPoolFiles(files, $("importGrokPoolBtn"));
+};
+
+$("importGrokPoolDirBtn").onclick = () => $("grokPoolDirectory").click();
+$("grokPoolDirectory").onchange = async (event) => {
+  const files = [...(event.target.files || [])].filter((file) => file.name.toLowerCase().endsWith(".json"));
+  event.target.value = "";
+  if (!files.length) {
+    toast("所选目录中没有 JSON 文件", "error");
+    return;
+  }
+  await importGrokPoolFiles(files, $("importGrokPoolDirBtn"));
+};
+
+async function importGrokPoolFiles(files, button) {
+  if (!files.length) return;
+  await run(async () => {
+    const payload = await Promise.all(files.map(async (file) => ({
+      name: file.webkitRelativePath || file.name,
+      content: await file.text(),
+    })));
+    const response = await api("/api/grok-pool", {
+      method: "POST",
+      body: JSON.stringify({ files: payload }),
+    });
+    await refreshAll();
+    const failed = response.result?.failed || [];
+    if (failed.length) {
+      toast(`部分文件失败：${failed.join("；")}`, "error");
+      return false;
+    }
+  }, { button, busyLabel: "导入中…", success: `已处理 ${files.length} 个 JSON 文件` });
+}
+
+$("inspectGrokPoolBtn").onclick = () => run(async () => {
+  state.grokPool = await api("/api/grok-pool/inspect", { method: "POST" });
+  renderGrokPool(state.grokPool);
+}, { button: $("inspectGrokPoolBtn"), busyLabel: "启动中…", success: "号池巡检已启动" });
+
+$("stopGrokPoolBtn").onclick = () => run(async () => {
+  await api("/api/grok-pool/inspect", { method: "DELETE" });
+  await loadGrokPool();
+}, { button: $("stopGrokPoolBtn"), busyLabel: "停止中…", success: "已请求停止巡检" });
+
+async function bulkGrokPoolAction(action, button) {
+  const abnormal = (state.grokPool?.accounts || []).filter((account) => {
+    const classification = account.classification || "uninspected";
+    return classification !== "healthy" && classification !== "uninspected" &&
+      (action !== "disable" || !account.disabled);
+  });
+  if (!abnormal.length) {
+    toast("当前没有已巡检的异常账号", "error");
+    return;
+  }
+  const verb = action === "delete" ? "删除" : "禁用";
+  const extra = action === "delete" ? "删除后需要重新导入才能恢复。" : "原凭据仍会保留。";
+  if (!confirm(`确定批量${verb} ${abnormal.length} 个异常账号？\n${extra}`)) return;
+  await run(async () => {
+    const response = await api("/api/grok-pool/bulk", {
+      method: "POST",
+      body: JSON.stringify({ action }),
+    });
+    await refreshAll();
+    if (response.result?.failed?.length) {
+      toast(`操作完成，但有文件清理失败：${response.result.failed.join("；")}`, "error");
+      return false;
+    }
+  }, { button, busyLabel: `${verb}中…`, success: `已批量${verb} ${abnormal.length} 个异常账号` });
+}
+
+$("batchDisableGrokPoolBtn").onclick = () => bulkGrokPoolAction("disable", $("batchDisableGrokPoolBtn"));
+$("batchDeleteGrokPoolBtn").onclick = () => bulkGrokPoolAction("delete", $("batchDeleteGrokPoolBtn"));
+
+$("activateGrokPoolBtn").onclick = () => {
+  const profile = state.profiles.find((item) => item.name === "Grok Auth（本地代理）");
+  if (!profile) {
+    toast("没有找到号池本地 profile，请重新导入账号", "error");
+    return;
+  }
+  activateProfile(profile.id, $("activateGrokPoolBtn"), profile.name);
+};
+
+$("toggleGrokPoolKeyBtn").onclick = () => {
+  const input = $("grokPoolApiKey");
+  input.type = input.type === "password" ? "text" : "password";
+  $("toggleGrokPoolKeyBtn").textContent = input.type === "password" ? "显示" : "隐藏";
+};
+
+$("copyGrokPoolUrlBtn").onclick = () => run(
+  () => copyText($("grokPoolBaseUrl").value, "号池 Base URL 已复制"),
+  { button: $("copyGrokPoolUrlBtn") },
+);
+
+$("copyGrokPoolKeyBtn").onclick = () => run(
+  () => copyText($("grokPoolApiKey").value, "号池 API Key 已复制"),
+  { button: $("copyGrokPoolKeyBtn") },
+);
 
 $("refreshBackupsBtn").onclick = () => run(async () => {
   renderBackups(await api("/api/backups"));

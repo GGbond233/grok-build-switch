@@ -127,6 +127,7 @@ image_base_url = "https://images.example/v1"
 [models]
 default = "provider-default"
 web_search = "provider-search"
+default_reasoning_effort = "high"
 temperature = 0.4
 
 [subagents]
@@ -157,6 +158,9 @@ base_url = "https://provider.example/v1"
 	}
 	if _, ok := tableAt(doc, "models")["web_search"]; ok {
 		t.Fatalf("web search model was not removed: %#v", tableAt(doc, "models"))
+	}
+	if _, ok := tableAt(doc, "models")["default_reasoning_effort"]; ok {
+		t.Fatalf("default reasoning effort was not removed: %#v", tableAt(doc, "models"))
 	}
 	if tableAt(doc, "models")["temperature"] != 0.4 {
 		t.Fatalf("unrelated model default was not preserved: %#v", tableAt(doc, "models"))
@@ -427,5 +431,76 @@ default_model = "x"
 	}
 	if imported.EffectiveAPIKey() != "sk-only-on-profile" {
 		t.Fatalf("api key not written to config, got %q", imported.EffectiveAPIKey())
+	}
+}
+
+func TestApplyProfileWritesReasoningEffortDefaults(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(path, []byte("[models]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	profile := profiles.Profile{
+		BaseURL:      "http://127.0.0.1:17878/grok/v1",
+		APIKey:       "local-key",
+		DefaultModel: "grok-4.5",
+		Models:       []profiles.ModelDef{{Name: "grok-4.5", Model: "grok-4.5", APIBackend: "responses"}},
+	}
+	if err := ApplyProfileToFile(path, profile); err != nil {
+		t.Fatal(err)
+	}
+	doc, err := readDoc(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := stringAt(tableAt(doc, "models"), "default_reasoning_effort"); got != "high" {
+		t.Fatalf("default_reasoning_effort = %q", got)
+	}
+	model, _ := tableAt(doc, "model")["grok-4.5"].(map[string]any)
+	if !boolAt(model, "supports_reasoning_effort") {
+		t.Fatal("supports_reasoning_effort was not written")
+	}
+	want := []string{"low", "medium", "high"}
+	got := stringSliceAt(model, "reasoning_efforts")
+	if len(got) != len(want) {
+		t.Fatalf("reasoning_efforts = %#v", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("reasoning_efforts = %#v, want %#v", got, want)
+		}
+	}
+}
+
+func TestImportProfilePreservesExplicitReasoningEffort(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	data := `
+[models]
+default = "grok-4.5"
+default_reasoning_effort = "medium"
+
+[model."grok-4.5"]
+model = "grok-4.5"
+api_backend = "responses"
+supports_reasoning_effort = true
+reasoning_efforts = ["low", "medium"]
+`
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	profile, err := ImportProfile(path, "reasoning")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.DefaultReasoningEffort != "medium" {
+		t.Fatalf("DefaultReasoningEffort = %q", profile.DefaultReasoningEffort)
+	}
+	if len(profile.Models) != 1 || !profile.Models[0].SupportsReasoningEffort {
+		t.Fatalf("Models = %#v", profile.Models)
+	}
+	want := []string{"low", "medium"}
+	if got := profile.Models[0].ReasoningEfforts; len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("ReasoningEfforts = %#v", got)
 	}
 }

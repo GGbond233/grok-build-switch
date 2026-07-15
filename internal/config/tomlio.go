@@ -20,13 +20,14 @@ func ImportProfile(path, name string) (profiles.Profile, error) {
 		return profiles.Profile{}, err
 	}
 	profile := profiles.Profile{
-		Name:                  name,
-		UpstreamFormat:        "openai",
-		BaseURL:               stringAt(tableAt(doc, "endpoints"), "models_base_url"),
-		DefaultModel:          stringAt(tableAt(doc, "models"), "default"),
-		WebSearchModel:        stringAt(tableAt(doc, "models"), "web_search"),
-		SubagentsDefaultModel: stringAt(tableAt(doc, "subagents"), "default_model"),
-		Models:                readModels(doc),
+		Name:                   name,
+		UpstreamFormat:         "openai",
+		BaseURL:                stringAt(tableAt(doc, "endpoints"), "models_base_url"),
+		DefaultModel:           stringAt(tableAt(doc, "models"), "default"),
+		DefaultReasoningEffort: stringAt(tableAt(doc, "models"), "default_reasoning_effort"),
+		WebSearchModel:         stringAt(tableAt(doc, "models"), "web_search"),
+		SubagentsDefaultModel:  stringAt(tableAt(doc, "subagents"), "default_model"),
+		Models:                 readModels(doc),
 	}
 	if profile.Name == "" {
 		profile.Name = "Default"
@@ -77,7 +78,7 @@ func UseOfficialAuthText(data []byte) []byte {
 		case "endpoints":
 			out = append(out, removeAssignments(lines[i:end], "models_base_url")...)
 		case "models":
-			out = append(out, removeAssignments(lines[i:end], "default", "web_search")...)
+			out = append(out, removeAssignments(lines[i:end], "default", "web_search", "default_reasoning_effort")...)
 		case "subagents":
 			out = append(out, removeAssignments(lines[i:end], "default_model")...)
 		default:
@@ -170,7 +171,8 @@ func SnippetForProfile(profile profiles.Profile) (string, error) {
 	b.WriteString("models_base_url = " + quote(profile.BaseURL) + "\n\n")
 	b.WriteString("[models]\n")
 	b.WriteString("default = " + quote(profile.DefaultModel) + "\n")
-	b.WriteString("web_search = " + quote(profile.WebSearchModel) + "\n\n")
+	b.WriteString("web_search = " + quote(profile.WebSearchModel) + "\n")
+	b.WriteString("default_reasoning_effort = " + quote(profile.DefaultReasoningEffort) + "\n\n")
 	b.WriteString("[subagents]\n")
 	b.WriteString("default_model = " + quote(profile.SubagentsDefaultModel) + "\n\n")
 	modelData, err := marshalModelSection(profile)
@@ -192,6 +194,7 @@ func ApplyProfile(doc map[string]any, profile profiles.Profile) {
 	models := ensureTable(doc, "models")
 	models["default"] = profile.DefaultModel
 	models["web_search"] = profile.WebSearchModel
+	models["default_reasoning_effort"] = profile.DefaultReasoningEffort
 
 	subagents := ensureTable(doc, "subagents")
 	subagents["default_model"] = profile.SubagentsDefaultModel
@@ -208,10 +211,12 @@ func ApplyProfile(doc map[string]any, profile profiles.Profile) {
 			apiKey = effectiveKey
 		}
 		entry := map[string]any{
-			"model":                   model.Model,
-			"api_key":                 apiKey,
-			"api_backend":             model.APIBackend,
-			"supports_backend_search": model.SupportsBackendSearch,
+			"model":                     model.Model,
+			"api_key":                   apiKey,
+			"api_backend":               model.APIBackend,
+			"supports_backend_search":   model.SupportsBackendSearch,
+			"supports_reasoning_effort": model.SupportsReasoningEffort,
+			"reasoning_efforts":         model.ReasoningEfforts,
 		}
 		// Omit zero values so Grok uses its own defaults:
 		// - omitted context_window → ~200k for new models (or built-in inherit)
@@ -235,6 +240,7 @@ func ApplyProfile(doc map[string]any, profile profiles.Profile) {
 
 func ApplyProfileText(data []byte, profile profiles.Profile) ([]byte, error) {
 	data = trimUTF8BOM(data)
+	profile = profiles.Normalize(profile)
 	newModelData, err := marshalModelSection(profile)
 	if err != nil {
 		return nil, err
@@ -323,15 +329,17 @@ func readModels(doc map[string]any) []profiles.ModelDef {
 			continue
 		}
 		out = append(out, profiles.ModelDef{
-			Name:                  key,
-			Model:                 stringAt(table, "model"),
-			BaseURL:               stringAt(table, "base_url"),
-			APIKey:                stringAt(table, "api_key"),
-			APIBackend:            stringAt(table, "api_backend"),
-			ExtraHeaders:          stringMapAt(table, "extra_headers"),
-			SupportsBackendSearch: boolAt(table, "supports_backend_search"),
-			ContextWindow:         intAt(table, "context_window"),
-			MaxCompletionTokens:   intAt(table, "max_completion_tokens"),
+			Name:                    key,
+			Model:                   stringAt(table, "model"),
+			BaseURL:                 stringAt(table, "base_url"),
+			APIKey:                  stringAt(table, "api_key"),
+			APIBackend:              stringAt(table, "api_backend"),
+			ExtraHeaders:            stringMapAt(table, "extra_headers"),
+			SupportsBackendSearch:   boolAt(table, "supports_backend_search"),
+			SupportsReasoningEffort: boolAt(table, "supports_reasoning_effort"),
+			ReasoningEfforts:        stringSliceAt(table, "reasoning_efforts"),
+			ContextWindow:           intAt(table, "context_window"),
+			MaxCompletionTokens:     intAt(table, "max_completion_tokens"),
 		})
 	}
 	return out
@@ -383,6 +391,7 @@ func rewriteSection(lines []string, section string, profile profiles.Profile) []
 	case "models":
 		values["default"] = quote(profile.DefaultModel)
 		values["web_search"] = quote(profile.WebSearchModel)
+		values["default_reasoning_effort"] = quote(profile.DefaultReasoningEffort)
 	case "subagents":
 		values["default_model"] = quote(profile.SubagentsDefaultModel)
 	}
@@ -556,6 +565,23 @@ func stringMapAt(table map[string]any, key string) map[string]string {
 			out[k] = fmt.Sprintf("%v", s)
 		default:
 			out[k] = fmt.Sprintf("%v", s)
+		}
+	}
+	return out
+}
+
+func stringSliceAt(table map[string]any, key string) []string {
+	raw, ok := table[key].([]any)
+	if !ok {
+		if values, stringsOK := table[key].([]string); stringsOK {
+			return append([]string(nil), values...)
+		}
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	for _, value := range raw {
+		if text, textOK := value.(string); textOK && strings.TrimSpace(text) != "" {
+			out = append(out, strings.TrimSpace(text))
 		}
 	}
 	return out
