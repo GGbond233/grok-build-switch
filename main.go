@@ -14,6 +14,8 @@ import (
 
 	"grok_switch/internal/autostart"
 	"grok_switch/internal/crash"
+	"grok_switch/internal/grokauth"
+	"grok_switch/internal/grokpool"
 	"grok_switch/internal/paths"
 	"grok_switch/internal/profiles"
 	"grok_switch/internal/server"
@@ -51,6 +53,23 @@ func main() {
 
 	profileStore := profiles.NewStore(resolved.ProfilesFile)
 	settingsStore := settings.NewStore(resolved.SettingsFile)
+	grokAuthStore := grokauth.NewStore(resolved.GrokAuthFile)
+	grokPool, err := grokpool.NewManager(resolved.GrokPoolDir)
+	if err != nil {
+		fatal(err)
+	}
+	if err := grokAuthStore.SetProxyURL(grokPool.Status().Settings.ProxyURL); err != nil {
+		fatal(err)
+	}
+	if singleStatus, statusErr := grokAuthStore.Status(); statusErr == nil && singleStatus.Configured {
+		if raw, readErr := os.ReadFile(resolved.GrokAuthFile); readErr == nil {
+			if _, migrateErr := grokPool.Ensure([]grokpool.ImportFile{{Name: "legacy-grok-auth.json", Content: string(raw)}}); migrateErr != nil {
+				crash.Logf("migrate legacy Grok auth into pool: %v", migrateErr)
+			}
+		}
+	}
+	grokPool.Start()
+	defer grokPool.Close()
 	sw := &switcher.Switcher{
 		ConfigPath: resolved.GrokConfig,
 		BackupsDir: resolved.BackupsDir,
@@ -72,6 +91,8 @@ func main() {
 		Paths:    resolved,
 		Profiles: profileStore,
 		Settings: settingsStore,
+		GrokAuth: grokAuthStore,
+		GrokPool: grokPool,
 		Switcher: sw,
 		Assets:   assets,
 		ExePath:  exePath,

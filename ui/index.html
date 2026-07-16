@@ -208,6 +208,102 @@
         <button type="submit" id="saveSettingsBtn" class="btn primary">保存设置</button>
       </form>
 
+      <section class="formCard" id="grokAuthCard">
+        <div class="rowBetween">
+          <div>
+            <h2 class="sectionTitle">Grok Auth JSON</h2>
+            <p class="muted tiny">统一 xAI OAuth 号池入口：导入后自动进入下方巡检池，不再依赖 CPA。</p>
+          </div>
+          <span id="grokAuthBadge" class="badge">未配置</span>
+        </div>
+
+        <p id="grokAuthStatus" class="muted tiny">加载中…</p>
+
+        <div id="grokAuthConnection" hidden>
+          <label class="field">本地 Base URL
+            <div class="keyRow">
+              <input id="grokAuthBaseUrl" class="mono" readonly>
+              <button type="button" id="copyGrokAuthUrlBtn" class="btn sm">复制</button>
+            </div>
+          </label>
+          <label class="field">本地 API Key
+            <div class="keyRow authKeyRow">
+              <input id="grokAuthApiKey" class="mono" type="password" readonly autocomplete="off">
+              <button type="button" id="toggleGrokAuthKeyBtn" class="btn sm">显示</button>
+              <button type="button" id="copyGrokAuthKeyBtn" class="btn sm">复制</button>
+            </div>
+          </label>
+        </div>
+
+        <div class="inlineActions">
+          <button type="button" id="importGrokAuthBtn" class="btn primary">导入 auth JSON</button>
+          <button type="button" id="importGrokAuthDirBtn" class="btn">选择目录导入号池</button>
+          <button type="button" id="activateGrokAuthBtn" class="btn" hidden>启用本地 Grok</button>
+          <button type="button" id="refreshGrokAuthBtn" class="btn" hidden>刷新 token</button>
+          <button type="button" id="deleteGrokAuthBtn" class="btn danger" hidden>删除</button>
+        </div>
+        <input type="file" id="grokAuthFile" accept="application/json,.json" hidden>
+        <input type="file" id="grokAuthDirectory" accept="application/json,.json" webkitdirectory directory multiple hidden>
+        <p class="muted tiny">支持 CPA 的 <span class="mono">xai-*.json</span> 和 Grok CLI 的 <span class="mono">~/.grok/auth.json</span>。单文件和目录导入都进入同一个自动巡检号池；页面不会把 xAI access token 当作 API Key 暴露。</p>
+      </section>
+
+      <section class="formCard" id="grokPoolCard">
+        <div class="rowBetween">
+          <div>
+            <h2 class="sectionTitle">Grok 号池自动巡检</h2>
+            <p class="muted tiny">多账号轮换与定时健康检查；明确坏号会自动退出代理可用集合，但不会被自动删除。</p>
+          </div>
+          <span id="grokPoolBadge" class="badge">0 个账号</span>
+        </div>
+
+        <div id="grokPoolSummary" class="poolSummary"></div>
+        <p id="grokPoolProgress" class="muted tiny">尚未导入号池账号。</p>
+
+        <form id="grokPoolSettingsForm" class="poolSettings">
+          <label class="check"><input type="checkbox" id="grokPoolAutoEnabled"> 自动巡检</label>
+          <label class="field">间隔（分钟）
+            <input id="grokPoolInterval" type="number" min="30" max="1440" value="360">
+          </label>
+          <label class="field">并发数
+            <input id="grokPoolWorkers" type="number" min="1" max="16" value="4">
+          </label>
+          <label class="field poolProxyField">网络代理（巡检、token 刷新和号池转发共用）
+            <input id="grokPoolProxyUrl" class="mono" placeholder="例如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080">
+          </label>
+          <button type="submit" id="saveGrokPoolSettingsBtn" class="btn">保存巡检设置</button>
+        </form>
+
+        <div id="grokPoolConnection" hidden>
+          <label class="field">号池 Base URL
+            <div class="keyRow">
+              <input id="grokPoolBaseUrl" class="mono" readonly>
+              <button type="button" id="copyGrokPoolUrlBtn" class="btn sm">复制</button>
+            </div>
+          </label>
+          <label class="field">号池 API Key
+            <div class="keyRow authKeyRow">
+              <input id="grokPoolApiKey" class="mono" type="password" readonly autocomplete="off">
+              <button type="button" id="toggleGrokPoolKeyBtn" class="btn sm">显示</button>
+              <button type="button" id="copyGrokPoolKeyBtn" class="btn sm">复制</button>
+            </div>
+          </label>
+        </div>
+
+        <div class="inlineActions">
+          <button type="button" id="importGrokPoolBtn" class="btn primary">批量导入 JSON</button>
+          <button type="button" id="importGrokPoolDirBtn" class="btn">选择目录导入</button>
+          <button type="button" id="inspectGrokPoolBtn" class="btn">立即巡检</button>
+          <button type="button" id="stopGrokPoolBtn" class="btn" hidden>停止巡检</button>
+          <button type="button" id="activateGrokPoolBtn" class="btn" hidden>启用号池</button>
+          <button type="button" id="batchDisableGrokPoolBtn" class="btn danger">批量禁用异常</button>
+          <button type="button" id="batchDeleteGrokPoolBtn" class="btn danger">批量删除异常</button>
+        </div>
+        <input type="file" id="grokPoolFiles" accept="application/json,.json" multiple hidden>
+        <input type="file" id="grokPoolDirectory" accept="application/json,.json" webkitdirectory directory multiple hidden>
+        <p class="muted tiny">“选择目录导入”会递归读取所选目录及子目录中的全部 .json；原文件保持不变。</p>
+        <div id="grokPoolAccounts" class="poolAccounts"></div>
+      </section>
+
       <section class="formCard configEditor">
         <div class="rowBetween">
           <div>
@@ -242,6 +338,6 @@
   </div>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <script src="/app.js?v=13"></script>
+  <script src="/app.js?v=18"></script>
 </body>
 </html>

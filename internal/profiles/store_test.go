@@ -31,3 +31,21 @@ func TestStorePreservesProfileTemplate(t *testing.T) {
 		t.Fatalf("List() template = %q, want responses", profiles[0].Template)
 	}
 }
+
+func TestNormalizeAddsReasoningEffortDefaults(t *testing.T) {
+	profile := Normalize(Profile{
+		DefaultModel: "grok-4.5",
+		Models:       []ModelDef{{Name: "grok-4.5", Model: "grok-4.5"}},
+	})
+	if profile.DefaultReasoningEffort != "high" {
+		t.Fatalf("DefaultReasoningEffort = %q", profile.DefaultReasoningEffort)
+	}
+	model := profile.Models[0]
+	if !model.SupportsReasoningEffort {
+		t.Fatal("SupportsReasoningEffort should default to true")
+	}
+	want := []string{"low", "medium", "high"}
+	if !stringSlicesEqual(model.ReasoningEfforts, want) {
+		t.Fatalf("ReasoningEfforts = %#v, want %#v", model.ReasoningEfforts, want)
+	}
+}
