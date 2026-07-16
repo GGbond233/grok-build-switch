@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -151,6 +152,26 @@ func TestAuthorizedAcceptsBearerAndXAPIKey(t *testing.T) {
 	bad.Header.Set("Authorization", "Bearer wrong")
 	if store.Authorized(bad) {
 		t.Fatal("Authorized() accepted wrong key")
+	}
+}
+
+func TestStatusRecoversCorruptPersistedStore(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "grok_auth.json")
+	if err := os.WriteFile(path, []byte("{broken"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	status, err := NewStore(path).Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Configured {
+		t.Fatalf("status = %#v, want unconfigured recovery", status)
+	}
+	matches, err := filepath.Glob(path + ".corrupt-*.bak")
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("corrupt backups = %#v, err = %v", matches, err)
 	}
 }
 

@@ -6,11 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"runtime"
 	"sync"
 	"time"
+
+	"grok_switch/internal/recovery"
 )
 
 type Store struct {
@@ -177,7 +180,17 @@ func (s *Store) readLocked() ([]Profile, error) {
 	}
 	var profiles []Profile
 	if err := json.Unmarshal(data, &profiles); err != nil {
-		return nil, fmt.Errorf("read profiles: %w", err)
+		cause := fmt.Errorf("read profiles: %w", err)
+		backup, backupErr := recovery.BackupCorrupt(s.path)
+		if backupErr != nil {
+			return nil, fmt.Errorf("%v; backup corrupt profiles: %w", cause, backupErr)
+		}
+		log.Printf("recovered profiles file %s after %v; backup=%s", s.path, cause, backup)
+		profiles = []Profile{}
+		if writeErr := s.writeLocked(profiles); writeErr != nil {
+			return nil, fmt.Errorf("restore empty profiles after %v: %w", cause, writeErr)
+		}
+		return profiles, nil
 	}
 	for i := range profiles {
 		profiles[i] = Normalize(profiles[i])

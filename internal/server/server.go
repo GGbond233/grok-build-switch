@@ -50,17 +50,28 @@ func (s *Server) SetOnChanged(fn func()) {
 }
 
 func (s *Server) Listen(preferred int) (*http.Server, int, error) {
+	if err := settings.ValidatePort(preferred); err != nil {
+		return nil, 0, err
+	}
 	mux := http.NewServeMux()
 	s.routes(mux)
 	var listener net.Listener
 	var err error
 	port := preferred
-	for i := 0; i < 20; i++ {
+	for i := 0; i < 20 && port <= settings.MaxPort; i++ {
 		listener, err = net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(port))
 		if err == nil {
 			break
 		}
 		port++
+	}
+	if listener == nil {
+		listener, err = net.Listen("tcp", "127.0.0.1:0")
+		if err == nil {
+			if tcpAddr, ok := listener.Addr().(*net.TCPAddr); ok {
+				port = tcpAddr.Port
+			}
+		}
 	}
 	if listener == nil {
 		return nil, 0, err
@@ -329,7 +340,11 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		updated, err := s.Settings.Update(next)
 		if err != nil {
-			writeError(w, err, http.StatusInternalServerError)
+			status := http.StatusInternalServerError
+			if settings.IsValidationError(err) {
+				status = http.StatusBadRequest
+			}
+			writeError(w, err, status)
 			return
 		}
 		if err := autostart.Sync(updated.Autostart, s.ExePath, updated.SilentAutostart); err != nil {

@@ -4,7 +4,12 @@ grok_switch.exe
 *.syso
 *.test
 *.out
+grok_switch.exe.sha256
 site/
+
+# Code-signing private keys must never be committed
+*.pfx
+*.p12
 
 # Go
 bin/

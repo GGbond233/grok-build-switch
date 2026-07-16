@@ -19,6 +19,16 @@ func ImportProfile(path, name string) (profiles.Profile, error) {
 	if err != nil {
 		return profiles.Profile{}, err
 	}
+	subagents := tableAt(doc, "subagents")
+	// [subagents.models] unmarshals as nested table under subagents.models
+	subModels := tableAt(subagents, "models")
+	explore := stringAt(subModels, "explore")
+	plan := stringAt(subModels, "plan")
+	// Legacy unrecognized key (kept only for migration on import).
+	legacy := stringAt(subagents, "default_model")
+	if explore == "" && plan == "" && legacy != "" {
+		explore, plan = legacy, legacy
+	}
 	profile := profiles.Profile{
 		Name:                   name,
 		UpstreamFormat:         "openai",
@@ -26,8 +36,11 @@ func ImportProfile(path, name string) (profiles.Profile, error) {
 		DefaultModel:           stringAt(tableAt(doc, "models"), "default"),
 		DefaultReasoningEffort: stringAt(tableAt(doc, "models"), "default_reasoning_effort"),
 		WebSearchModel:         stringAt(tableAt(doc, "models"), "web_search"),
-		SubagentsDefaultModel:  stringAt(tableAt(doc, "subagents"), "default_model"),
-		Models:                 readModels(doc),
+		SubagentsModels: profiles.SubagentsModels{
+			Explore: explore,
+			Plan:    plan,
+		},
+		Models: readModels(doc),
 	}
 	if profile.Name == "" {
 		profile.Name = "Default"
@@ -80,7 +93,11 @@ func UseOfficialAuthText(data []byte) []byte {
 		case "models":
 			out = append(out, removeAssignments(lines[i:end], "default", "web_search", "default_reasoning_effort")...)
 		case "subagents":
+			// Drop legacy default_model; keep enabled and other user keys.
 			out = append(out, removeAssignments(lines[i:end], "default_model")...)
+		case "subagents.models":
+			// Drop switch-managed type model pins so official auth is clean.
+			out = append(out, removeAssignments(lines[i:end], "explore", "plan")...)
 		default:
 			out = append(out, lines[i:end]...)
 		}
@@ -173,8 +190,12 @@ func SnippetForProfile(profile profiles.Profile) (string, error) {
 	b.WriteString("default = " + quote(profile.DefaultModel) + "\n")
 	b.WriteString("web_search = " + quote(profile.WebSearchModel) + "\n")
 	b.WriteString("default_reasoning_effort = " + quote(profile.DefaultReasoningEffort) + "\n\n")
-	b.WriteString("[subagents]\n")
-	b.WriteString("default_model = " + quote(profile.SubagentsDefaultModel) + "\n\n")
+	if snippet := formatSubagentsModelsSnippet(profile); snippet != "" {
+		b.WriteString(snippet)
+		if !strings.HasSuffix(snippet, "\n\n") {
+			b.WriteString("\n")
+		}
+	}
 	modelData, err := marshalModelSection(profile)
 	if err != nil {
 		return "", err
@@ -196,8 +217,7 @@ func ApplyProfile(doc map[string]any, profile profiles.Profile) {
 	models["web_search"] = profile.WebSearchModel
 	models["default_reasoning_effort"] = profile.DefaultReasoningEffort
 
-	subagents := ensureTable(doc, "subagents")
-	subagents["default_model"] = profile.SubagentsDefaultModel
+	applySubagentsModelsToDoc(doc, profile)
 
 	modelTable := make(map[string]any, len(profile.Models))
 	effectiveKey := profile.EffectiveAPIKey()
@@ -248,6 +268,7 @@ func ApplyProfileText(data []byte, profile profiles.Profile) ([]byte, error) {
 	lines := splitLines(string(data))
 	var out []string
 	seen := map[string]bool{}
+	seenSubagentsModels := false
 	for i := 0; i < len(lines); {
 		header := parseHeader(lines[i])
 		if header == "" {
@@ -259,7 +280,24 @@ func ApplyProfileText(data []byte, profile profiles.Profile) ([]byte, error) {
 			i = skipSection(lines, i+1)
 			continue
 		}
-		if header == "endpoints" || header == "models" || header == "subagents" {
+		if header == "subagents.models" {
+			end := skipSection(lines, i+1)
+			if rewritten := rewriteSubagentsModelsSection(lines[i:end], profile); len(rewritten) > 0 {
+				out = append(out, rewritten...)
+			}
+			seenSubagentsModels = true
+			i = end
+			continue
+		}
+		if header == "subagents" {
+			// Preserve [subagents] keys (e.g. enabled) but drop legacy default_model.
+			end := skipSection(lines, i+1)
+			out = append(out, removeAssignments(lines[i:end], "default_model")...)
+			seen["subagents"] = true
+			i = end
+			continue
+		}
+		if header == "endpoints" || header == "models" {
 			end := skipSection(lines, i+1)
 			out = append(out, rewriteSection(lines[i:end], header, profile)...)
 			seen[header] = true
@@ -270,12 +308,20 @@ func ApplyProfileText(data []byte, profile profiles.Profile) ([]byte, error) {
 		out = append(out, lines[i:end]...)
 		i = end
 	}
-	for _, section := range []string{"endpoints", "models", "subagents"} {
+	for _, section := range []string{"endpoints", "models"} {
 		if !seen[section] {
 			if len(out) > 0 && strings.TrimSpace(out[len(out)-1]) != "" {
 				out = append(out, "")
 			}
 			out = append(out, rewriteSection([]string{"[" + section + "]"}, section, profile)...)
+		}
+	}
+	if !seenSubagentsModels {
+		if rewritten := rewriteSubagentsModelsSection([]string{"[subagents.models]"}, profile); len(rewritten) > 0 {
+			if len(out) > 0 && strings.TrimSpace(out[len(out)-1]) != "" {
+				out = append(out, "")
+			}
+			out = append(out, rewritten...)
 		}
 	}
 	if len(out) > 0 && strings.TrimSpace(out[len(out)-1]) != "" {
@@ -354,6 +400,83 @@ func marshalModelSection(profile profiles.Profile) ([]byte, error) {
 	return toml.Marshal(doc)
 }
 
+func applySubagentsModelsToDoc(doc map[string]any, profile profiles.Profile) {
+	sub := ensureTable(doc, "subagents")
+	delete(sub, "default_model")
+	models := map[string]any{}
+	if profile.SubagentsModels.Explore != "" {
+		models["explore"] = profile.SubagentsModels.Explore
+	}
+	if profile.SubagentsModels.Plan != "" {
+		models["plan"] = profile.SubagentsModels.Plan
+	}
+	if len(models) > 0 {
+		sub["models"] = models
+	} else {
+		delete(sub, "models")
+	}
+	if len(sub) == 0 {
+		delete(doc, "subagents")
+	}
+}
+
+func formatSubagentsModelsSnippet(profile profiles.Profile) string {
+	lines := rewriteSubagentsModelsSection([]string{"[subagents.models]"}, profile)
+	if len(lines) == 0 {
+		return ""
+	}
+	return strings.Join(lines, "\n") + "\n\n"
+}
+
+// rewriteSubagentsModelsSection rewrites or creates [subagents.models].
+// Empty explore/plan means omit that key. If both empty, the section is removed.
+func rewriteSubagentsModelsSection(lines []string, profile profiles.Profile) []string {
+	values := map[string]string{}
+	if strings.TrimSpace(profile.SubagentsModels.Explore) != "" {
+		values["explore"] = quote(strings.TrimSpace(profile.SubagentsModels.Explore))
+	}
+	if strings.TrimSpace(profile.SubagentsModels.Plan) != "" {
+		values["plan"] = quote(strings.TrimSpace(profile.SubagentsModels.Plan))
+	}
+	if len(values) == 0 {
+		return nil
+	}
+	managed := map[string]bool{"explore": true, "plan": true}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(lines)+len(values))
+	if len(lines) == 0 {
+		out = append(out, "[subagents.models]")
+	} else {
+		out = append(out, "[subagents.models]")
+	}
+	start := 1
+	if len(lines) > 0 && parseHeader(lines[0]) == "" {
+		start = 0
+	}
+	for _, line := range lines[start:] {
+		key := assignmentKey(line)
+		if managed[key] {
+			if val, ok := values[key]; ok {
+				out = append(out, key+" = "+val)
+				seen[key] = true
+			}
+			continue
+		}
+		out = append(out, line)
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		if !seen[key] {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		out = append(out, key+" = "+values[key])
+	}
+	return out
+}
+
 func splitLines(text string) []string {
 	text = strings.ReplaceAll(text, "\r\n", "\n")
 	text = strings.ReplaceAll(text, "\r", "\n")
@@ -392,8 +515,6 @@ func rewriteSection(lines []string, section string, profile profiles.Profile) []
 		values["default"] = quote(profile.DefaultModel)
 		values["web_search"] = quote(profile.WebSearchModel)
 		values["default_reasoning_effort"] = quote(profile.DefaultReasoningEffort)
-	case "subagents":
-		values["default_model"] = quote(profile.SubagentsDefaultModel)
 	}
 	seen := map[string]bool{}
 	out := make([]string, 0, len(lines)+len(values))

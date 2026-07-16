@@ -1,6 +1,7 @@
 package profiles
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -47,5 +48,25 @@ func TestNormalizeAddsReasoningEffortDefaults(t *testing.T) {
 	want := []string{"low", "medium", "high"}
 	if !stringSlicesEqual(model.ReasoningEfforts, want) {
 		t.Fatalf("ReasoningEfforts = %#v, want %#v", model.ReasoningEfforts, want)
+	}
+}
+
+func TestStoreRecoversCorruptProfiles(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "profiles.json")
+	if err := os.WriteFile(path, []byte("{broken"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	profiles, err := NewStore(path).List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(profiles) != 0 {
+		t.Fatalf("profiles = %#v, want empty recovery", profiles)
+	}
+	matches, err := filepath.Glob(path + ".corrupt-*.bak")
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("corrupt backups = %#v, err = %v", matches, err)
 	}
 }

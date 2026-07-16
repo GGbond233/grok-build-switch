@@ -27,7 +27,7 @@ const TEMPLATES = {
     base_url: "https://api.openai.com/v1",
     default_model: "",
     web_search_model: "",
-    subagents_default_model: "",
+    subagents_models: { explore: "", plan: "" },
     models: [],
     available_models: [],
   },
@@ -37,7 +37,7 @@ const TEMPLATES = {
     base_url: "https://api.openai.com/v1",
     default_model: "",
     web_search_model: "",
-    subagents_default_model: "",
+    subagents_models: { explore: "", plan: "" },
     models: [],
     available_models: [],
   },
@@ -47,11 +47,23 @@ const TEMPLATES = {
     base_url: "https://api.anthropic.com",
     default_model: "",
     web_search_model: "",
-    subagents_default_model: "",
+    subagents_models: { explore: "", plan: "" },
     models: [],
     available_models: [],
   },
 };
+
+/** Normalize profile subagents models (supports legacy subagents_default_model). */
+function subagentsModelsOf(profile) {
+  const models = profile?.subagents_models || {};
+  let explore = models.explore || "";
+  let plan = models.plan || "";
+  if (!explore && !plan && profile?.subagents_default_model) {
+    explore = profile.subagents_default_model;
+    plan = profile.subagents_default_model;
+  }
+  return { explore, plan };
+}
 
 const TEMPLATE_KEYS = new Set(["custom", ...Object.keys(TEMPLATES)]);
 
@@ -725,10 +737,11 @@ function fillForm(profile) {
   (profile.models || []).forEach((model) => addModelCard(model));
   renderModelSelect();
   // Rebuild selects from enabled models, then restore saved values.
+  const sa = subagentsModelsOf(profile);
   syncEnabledModelList({
     default_model: profile.default_model || "",
     web_search_model: profile.web_search_model || "",
-    subagents_default_model: profile.subagents_default_model || "",
+    subagents_models: sa,
   });
   hideConnectionStatus();
   if ($("connectBlock")) $("connectBlock").open = false;
@@ -749,7 +762,7 @@ function applyTemplate(key) {
     api_key: keepKey || tpl.api_key || "",
     default_model: "",
     web_search_model: "",
-    subagents_default_model: "",
+    subagents_models: { explore: "", plan: "" },
     models: [],
     available_models: [],
   });
@@ -789,7 +802,7 @@ function stripSecrets(profile, includeKey) {
     default_model: profile.default_model,
     default_reasoning_effort: profile.default_reasoning_effort || "high",
     web_search_model: profile.web_search_model,
-    subagents_default_model: profile.subagents_default_model,
+    subagents_models: subagentsModelsOf(profile),
     available_models: profile.available_models || [],
     models: (profile.models || []).map((m) => {
       const item = {
@@ -847,7 +860,7 @@ function importProfileJSON(text) {
     api_key: profile.api_key || "",
     default_model: profile.default_model || "",
     web_search_model: profile.web_search_model || "",
-    subagents_default_model: profile.subagents_default_model || "",
+    subagents_models: subagentsModelsOf(profile),
     available_models: profile.available_models || [],
     models: profile.models || [],
   });
@@ -943,17 +956,24 @@ function syncEnabledModelList(preferred) {
   const fields = [
     { id: "defaultModel", emptyLabel: "（请先启用模型）", required: false },
     { id: "webSearchModel", emptyLabel: "（可选）", required: false },
-    { id: "subagentsDefaultModel", emptyLabel: "（可选）", required: false },
+    { id: "subagentsExploreModel", emptyLabel: "（继承主模型）", required: false },
+    { id: "subagentsPlanModel", emptyLabel: "（继承主模型）", required: false },
   ];
+  const currentSA = preferred?.subagents_models || {
+    explore: $("subagentsExploreModel")?.value || "",
+    plan: $("subagentsPlanModel")?.value || "",
+  };
   const prefer = preferred || {
     default_model: $("defaultModel")?.value || "",
     web_search_model: $("webSearchModel")?.value || "",
-    subagents_default_model: $("subagentsDefaultModel")?.value || "",
+    subagents_models: currentSA,
   };
+  const sa = prefer.subagents_models || currentSA;
   const values = {
     defaultModel: prefer.default_model ?? "",
     webSearchModel: prefer.web_search_model ?? "",
-    subagentsDefaultModel: prefer.subagents_default_model ?? "",
+    subagentsExploreModel: sa.explore ?? "",
+    subagentsPlanModel: sa.plan ?? "",
   };
 
   fields.forEach(({ id, emptyLabel }) => {
@@ -1132,7 +1152,10 @@ function readForm() {
     default_model: $("defaultModel")?.value?.trim() || "",
     default_reasoning_effort: "high",
     web_search_model: $("webSearchModel")?.value?.trim() || "",
-    subagents_default_model: $("subagentsDefaultModel")?.value?.trim() || "",
+    subagents_models: {
+      explore: $("subagentsExploreModel")?.value?.trim() || "",
+      plan: $("subagentsPlanModel")?.value?.trim() || "",
+    },
     models: rows.map((row) => {
       const get = (field) => row.querySelector(`[data-field="${field}"]`)?.value.trim() || "";
       const num = (field) => Number(get(field) || 0);
@@ -1235,7 +1258,7 @@ if ($("configPreviewBlock")) {
     if ($("configPreviewBlock").open) refreshProviderConfigPreview();
   });
 }
-["name", "baseUrl", "profileApiKey", "defaultModel", "webSearchModel", "subagentsDefaultModel", "upstreamFormat"].forEach((id) => {
+["name", "baseUrl", "profileApiKey", "defaultModel", "webSearchModel", "subagentsExploreModel", "subagentsPlanModel", "upstreamFormat"].forEach((id) => {
   const el = $(id);
   if (!el) return;
   el.addEventListener("input", scheduleProviderPreview);

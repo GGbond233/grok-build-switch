@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"embed"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -20,6 +22,7 @@ import (
 	"grok_switch/internal/profiles"
 	"grok_switch/internal/server"
 	"grok_switch/internal/settings"
+	"grok_switch/internal/singleinstance"
 	"grok_switch/internal/switcher"
 	"grok_switch/internal/tray"
 )
@@ -38,12 +41,33 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
+	// Initialize diagnostics before any directory setup so permission failures
+	// still produce a native error dialog and use the log whenever possible.
+	crash.Setup(resolved.LogFile)
 	if err := resolved.Ensure(); err != nil {
 		fatal(err)
 	}
-	// Open the crash log as early as possible so startup failures and any
-	// later stderr writes / panics are captured instead of vanishing.
-	crash.Setup(resolved.LogFile)
+
+	settingsStore := settings.NewStore(resolved.SettingsFile)
+	instanceLock, alreadyRunning, err := singleinstance.Acquire(resolved.DataDir)
+	if err != nil {
+		fatal(fmt.Errorf("创建单实例锁失败: %w", err))
+	}
+	if alreadyRunning {
+		url, findErr := waitForExistingInstanceURL(settingsStore, resolved.DataDir, 3*time.Second)
+		if findErr == nil {
+			if openErr := tray.OpenBrowser(url); openErr == nil {
+				return
+			} else {
+				crash.Logf("open existing instance failed: %v", openErr)
+			}
+		} else {
+			crash.Logf("find existing instance failed: %v", findErr)
+		}
+		crash.ShowInfo("grok_switch", "grok_switch 已经在运行，但未能自动打开管理页面。请使用系统托盘图标打开。")
+		return
+	}
+	defer instanceLock.Close()
 
 	exePath, err := os.Executable()
 	if err != nil {
@@ -52,7 +76,6 @@ func main() {
 	exePath, _ = filepath.Abs(exePath)
 
 	profileStore := profiles.NewStore(resolved.ProfilesFile)
-	settingsStore := settings.NewStore(resolved.SettingsFile)
 	grokAuthStore := grokauth.NewStore(resolved.GrokAuthFile)
 	grokPool, err := grokpool.NewManager(resolved.GrokPoolDir)
 	if err != nil {
@@ -137,6 +160,55 @@ func main() {
 	shutdown(httpServer)
 }
 
+func waitForExistingInstanceURL(store *settings.Store, dataDir string, timeout time.Duration) (string, error) {
+	deadline := time.Now().Add(timeout)
+	client := &http.Client{Timeout: 300 * time.Millisecond}
+	var lastErr error
+	for {
+		current, err := store.Get()
+		if err != nil {
+			lastErr = err
+		} else {
+			ports := []int{current.ActualPort}
+			if current.Port != current.ActualPort {
+				ports = append(ports, current.Port)
+			}
+			for _, port := range ports {
+				if settings.ValidatePort(port) != nil {
+					continue
+				}
+				url := fmt.Sprintf("http://127.0.0.1:%d", port)
+				resp, requestErr := client.Get(url + "/api/status")
+				if requestErr != nil {
+					lastErr = requestErr
+					continue
+				}
+				var status struct {
+					DataDir string `json:"data_dir"`
+				}
+				decodeErr := json.NewDecoder(resp.Body).Decode(&status)
+				_ = resp.Body.Close()
+				if decodeErr == nil && resp.StatusCode >= 200 && resp.StatusCode < 300 && status.DataDir == dataDir {
+					return url, nil
+				}
+				if decodeErr != nil {
+					lastErr = decodeErr
+				} else {
+					lastErr = fmt.Errorf("port %d is not the running grok_switch instance", port)
+				}
+			}
+		}
+		if !time.Now().Before(deadline) {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("running instance did not become ready")
+	}
+	return "", lastErr
+}
+
 func waitForSignal() {
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, os.Interrupt, syscall.SIGTERM)
@@ -150,6 +222,6 @@ func shutdown(srv interface{ Shutdown(context.Context) error }) {
 }
 
 func fatal(err error) {
-	fmt.Fprintln(os.Stderr, err)
+	crash.ReportFatal(err)
 	os.Exit(1)
 }

@@ -6,15 +6,17 @@
 
 ## 功能
 
-- 供应商增删改查：名称、Base URL、API Key、上游格式、默认 / 联网 / Subagents 模型、已启用模型列表
+- 供应商增删改查：名称、Base URL、API Key、上游格式、默认 / 联网 / explore·plan 子代理模型、已启用模型列表
 - 供应商默认使用 `high` 推理强度；每个模型自动写入 `supports_reasoning_effort = true` 和 `low/medium/high` 支持列表
-- 一键启用：写入 `[endpoints]`、`[models]`、`[subagents].default_model` 与 `[model.*]`，其它段尽量保留
+- 一键启用：写入 `[endpoints]`、`[models]`、`[subagents.models]`（explore / plan）与 `[model.*]`，其它段尽量保留
 - 切换 / 保存 config 前自动备份；设置页可还原备份、直接编辑 `config.toml`
 - 首次运行可从当前 `config.toml` 导入 Default 供应商
 - 导入 CPA `xai-*.json` 或 Grok CLI `auth.json`，由内嵌代理提供稳定的本地 URL/key 并自动刷新 token
 - Grok 多账号池：批量导入、定时自动巡检、健康分类、坏号自动隔离、健康号轮换与单账号回退
 - Web UI 仅监听 `127.0.0.1`（默认端口 `17878`，被占用时自动递增）
 - 可设置Windows 开机自启
+- Windows 单实例运行；再次双击 EXE 会打开已运行实例的管理页面
+- 启动失败时显示原生错误对话框，并尽可能写入诊断日志
 - 托盘菜单：快速切换、打开面板、复制地址、打开数据/日志目录
 
 ## 系统要求
@@ -39,6 +41,11 @@
 2. 下载 `grok_switch.exe`（或压缩包内的 exe）
 3. 放到任意目录，双击运行
 4. 托盘出现图标；浏览器会打开 `http://127.0.0.1:17878/`（可在设置中关闭「启动时打开面板」）
+5. 再次双击 EXE 不会启动第二个后台实例，而是打开已经运行的管理页面
+
+普通用户只需下载并运行，**不需要**配置证书、签名密码、Go 或 Node。发布流程会在
+仓库配置了代码签名证书时自动签名；未配置证书的版本仍可直接运行，但 Windows 可能显示
+SmartScreen 提示。下方签名配置仅供项目发布维护者使用。
 
 
 
@@ -85,11 +92,15 @@
 | `%USERPROFILE%\.grok_switch\grok_pool\accounts\` | 号池各账号 OAuth 凭据副本（**敏感**） |
 | `%USERPROFILE%\.grok_switch\grok_switch.log` | 日志 |
 
+如果持久化 JSON 因断电、手动编辑或同步软件冲突而损坏，程序会先将原文件重命名为
+`<文件名>.corrupt-<时间>.bak`，再恢复安全默认值。恢复过程会写入 `grok_switch.log`，
+损坏原件不会被静默覆盖。
+
 ## 构建
 
 ### 环境
 
-- [Go](https://go.dev/dl/) **1.22+**（`go.mod` 中版本以仓库为准；建议使用较新的稳定版）
+- [Go](https://go.dev/dl/) **1.26+**（与 `go.mod` 保持一致）
 - Windows x64
 - 可选：`rsrc`（嵌入 exe 图标）、ImageMagick `magick`（从 svg 生成 ico）
 
@@ -105,6 +116,33 @@ go install github.com/akavel/rsrc@latest
 ```
 
 会运行测试并生成 `grok_switch.exe`。
+
+以下内容只适用于从源码构建或发布 Release 的维护者，Release 下载用户无需操作。
+
+未配置证书时，本地构建会明确提示这是未签名的开发版本，并同时生成
+`grok_switch.exe.sha256`。正式发布应使用 Authenticode 签名：
+
+```powershell
+$env:GROK_SWITCH_SIGN_CERT = "C:\secure\grok-switch-signing.pfx"
+$env:GROK_SWITCH_SIGN_PASSWORD = "<pfx-password>"
+.\build.ps1 -RequireSignature
+```
+
+也可以通过当前用户或本机证书库中的 thumbprint 签名：
+
+```powershell
+$env:GROK_SWITCH_SIGN_THUMBPRINT = "<certificate-thumbprint>"
+.\build.ps1 -RequireSignature
+```
+
+仓库的 `Windows Release` 工作流会在推送 `v*` tag 时构建并上传 EXE 与 SHA-256 文件。
+配置以下 GitHub Actions Secrets 后会强制执行 Authenticode 签名；未配置时会发布带明确
+警告的未签名构建，不会阻塞 Release：
+
+- `WINDOWS_SIGNING_CERT_BASE64`：PFX 文件的 Base64 内容
+- `WINDOWS_SIGNING_CERT_PASSWORD`：PFX 密码
+
+证书私钥和密码不得提交到仓库。
 
 ### 手动构建
 

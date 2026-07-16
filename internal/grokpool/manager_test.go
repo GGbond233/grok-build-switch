@@ -121,6 +121,27 @@ func TestAutomaticInspectionClassifiesAndRoutesOnlyAvailableAccount(t *testing.T
 	}
 }
 
+func TestNewManagerRecoversCorruptPoolIndex(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pool.json")
+	if err := os.WriteFile(path, []byte("{broken"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	manager, err := NewManager(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := manager.Status()
+	if status.LocalAPIKey == "" || len(status.Accounts) != 0 {
+		t.Fatalf("recovered status = %#v", status)
+	}
+	matches, err := filepath.Glob(path + ".corrupt-*.bak")
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("corrupt backups = %#v, err = %v", matches, err)
+	}
+}
+
 func TestGeneric429DoesNotIsolateAccount(t *testing.T) {
 	got := classify(http.StatusTooManyRequests, "rate_limit", "too many requests", false)
 	if got.Name != "probe_error" || got.Action != "keep" {
@@ -281,6 +302,82 @@ func TestInspectionUsesConfiguredHTTPProxy(t *testing.T) {
 	}
 	if status.Settings.ProxyURL != proxy.URL {
 		t.Fatalf("stored proxy URL = %q", status.Settings.ProxyURL)
+	}
+}
+
+func TestClientForTransportNilProxyUsesDefaultTransport(t *testing.T) {
+	// Regression: empty proxy previously put a typed-nil *http.Transport into
+	// http.Client.Transport and paniced on Do (inspect.go doProbe).
+	client := clientForTransport(nil)
+	if client.Transport != nil {
+		t.Fatalf("expected nil Client.Transport for empty proxy, got %#v", client.Transport)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	req, err := http.NewRequest(http.MethodGet, server.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("Do with nil proxy transport: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+}
+
+func TestEmptyProxyInspectionDoesNotPanic(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/models":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":[{"id":"grok-4.5"}]}`))
+		case r.URL.Path == "/responses":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"id":"resp"}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer upstream.Close()
+
+	manager, err := NewManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.UpdateSettings(Settings{
+		Enabled:         false,
+		IntervalMinutes: 360,
+		Workers:         1,
+		ProxyURL:        "",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	manager.upstreamURL = upstream.URL
+	expiry := time.Now().UTC().Add(time.Hour).Format(time.RFC3339)
+	if _, err := manager.Import([]ImportFile{{
+		Name:    "direct.json",
+		Content: fmt.Sprintf(`{"type":"xai","access_token":"direct-token","expired":%q,"email":"direct@example.com"}`, expiry),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.StartInspection(); err != nil {
+		t.Fatal(err)
+	}
+	manager.runWG.Wait()
+	status := manager.Status()
+	if len(status.Accounts) != 1 {
+		t.Fatalf("accounts = %#v", status.Accounts)
+	}
+	if status.Accounts[0].Classification != "healthy" {
+		t.Fatalf("classification = %q reason=%q err=%q",
+			status.Accounts[0].Classification, status.Accounts[0].Reason, status.Accounts[0].ErrorMessage)
 	}
 }
 
