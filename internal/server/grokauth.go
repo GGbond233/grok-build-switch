@@ -261,23 +261,27 @@ func (s *Server) upsertGrokAuthProfile() (profiles.Profile, error) {
 		}
 	}
 	profile := profiles.Profile{
-		Name:                  grokAuthProfileName,
-		Template:              "responses",
-		UpstreamFormat:        "openai_responses",
-		BaseURL:               baseURL,
-		APIKey:                apiKey,
-		AvailableModels:       modelNames(defaultGrokAuthModels),
-		DefaultModel:          "grok-4.5",
-		WebSearchModel:        "grok-4.5",
-		SubagentsDefaultModel: "grok-composer-2.5-fast",
-		Models:                cloneModelDefs(defaultGrokAuthModels, baseURL, apiKey),
+		Name:            grokAuthProfileName,
+		Template:        "responses",
+		UpstreamFormat:  "openai_responses",
+		BaseURL:         baseURL,
+		APIKey:          apiKey,
+		AvailableModels: modelNames(defaultGrokAuthModels),
+		DefaultModel:    "grok-4.5",
+		WebSearchModel:  "grok-4.5",
+		SubagentsModels: profiles.SubagentsModels{
+			Explore: "grok-4.5",
+			Plan:    "grok-composer-2.5-fast",
+		},
+		Models: cloneModelDefs(defaultGrokAuthModels, baseURL, apiKey),
 	}
 	if existing == nil {
 		return s.Profiles.Create(profile)
 	}
 	profile.DefaultModel = firstNonEmptyServer(existing.DefaultModel, profile.DefaultModel)
 	profile.WebSearchModel = firstNonEmptyServer(existing.WebSearchModel, profile.WebSearchModel)
-	profile.SubagentsDefaultModel = firstNonEmptyServer(existing.SubagentsDefaultModel, profile.SubagentsDefaultModel)
+	profile.SubagentsModels.Explore = firstNonEmptyServer(existing.SubagentsModels.Explore, profile.SubagentsModels.Explore)
+	profile.SubagentsModels.Plan = firstNonEmptyServer(existing.SubagentsModels.Plan, profile.SubagentsModels.Plan)
 	if len(existing.Models) > 0 {
 		profile.Models = cloneModelDefs(existing.Models, baseURL, apiKey)
 		profile.AvailableModels = uniqueModelNames(append(existing.AvailableModels, modelNames(profile.Models)...))

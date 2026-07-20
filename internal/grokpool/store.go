@@ -6,11 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
+
+	"grok_switch/internal/recovery"
 )
 
 func (m *Manager) load() error {
@@ -31,7 +34,18 @@ func (m *Manager) load() error {
 		return err
 	}
 	if err := json.Unmarshal(data, &m.state); err != nil {
-		return fmt.Errorf("读取 Grok 号池: %w", err)
+		cause := fmt.Errorf("读取 Grok 号池: %w", err)
+		backup, backupErr := recovery.BackupCorrupt(m.indexPath)
+		if backupErr != nil {
+			return fmt.Errorf("%v; 备份损坏号池文件: %w", cause, backupErr)
+		}
+		log.Printf("recovered Grok pool file %s after %v; backup=%s", m.indexPath, cause, backup)
+		m.state = persistedState{Version: poolVersion, Settings: defaultSettings(), Accounts: []Account{}}
+		m.state.LocalAPIKey, err = newPoolAPIKey()
+		if err != nil {
+			return err
+		}
+		return m.saveLocked()
 	}
 	m.state.Version = poolVersion
 	m.state.Settings = normalizeSettings(m.state.Settings)

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -22,6 +23,7 @@ import (
 	"time"
 
 	"grok_switch/internal/netproxy"
+	"grok_switch/internal/recovery"
 )
 
 const (
@@ -323,12 +325,21 @@ func (s *Store) readLocked() (Credential, error) {
 	}
 	var credential Credential
 	if err := json.Unmarshal(data, &credential); err != nil {
-		return Credential{}, fmt.Errorf("读取 Grok auth store: %w", err)
+		return s.recoverCorruptLocked(fmt.Errorf("读取 Grok auth store: %w", err))
 	}
 	if credential.AccessToken == "" || credential.LocalAPIKey == "" {
-		return Credential{}, fmt.Errorf("Grok auth store 不完整")
+		return s.recoverCorruptLocked(fmt.Errorf("Grok auth store 不完整"))
 	}
 	return credential, nil
+}
+
+func (s *Store) recoverCorruptLocked(cause error) (Credential, error) {
+	backup, err := recovery.BackupCorrupt(s.path)
+	if err != nil {
+		return Credential{}, fmt.Errorf("%v; 备份损坏 Grok auth store: %w", cause, err)
+	}
+	log.Printf("recovered Grok auth store %s after %v; backup=%s", s.path, cause, backup)
+	return Credential{}, os.ErrNotExist
 }
 
 func (s *Store) writeLocked(credential Credential) error {

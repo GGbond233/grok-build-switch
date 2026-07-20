@@ -1,6 +1,6 @@
 # grok_build_switch
 
-`grok_build_switch` 是一个 Windows 本地托盘工具，用来管理 Grok Build 的 `config.toml`。你可以把不同上游、API Key、默认模型、联网搜索模型和 subagents 模型保存成供应商 Profile，然后一键切换。
+`grok_build_switch` 是一个 Windows 本地托盘工具，用来管理 Grok Build 的 `config.toml`。你可以把不同上游、API Key、默认模型、联网搜索模型和 explore/plan 子代理模型保存成供应商 Profile，然后一键切换。
 
 ## 快速入口
 

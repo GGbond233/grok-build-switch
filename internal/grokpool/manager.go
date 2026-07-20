@@ -467,8 +467,16 @@ func (m *Manager) Transport() http.RoundTripper {
 	return m.transport
 }
 
-func clientForTransport(transport http.RoundTripper) *http.Client {
-	return &http.Client{Transport: transport, Timeout: 25 * time.Second}
+// clientForTransport builds an HTTP client for pool inspection.
+// When transport is nil (no proxy configured), leave Client.Transport unset so
+// net/http uses DefaultTransport. Assigning a typed-nil *http.Transport into
+// the RoundTripper interface would panic on the first request.
+func clientForTransport(transport *http.Transport) *http.Client {
+	client := &http.Client{Timeout: 25 * time.Second}
+	if transport != nil {
+		client.Transport = transport
+	}
+	return client
 }
 
 func credentialID(credential grokauth.Credential) string {

@@ -1,8 +1,9 @@
+//go:build !wailsgui
+
 package main
 
 import (
 	"context"
-	"embed"
 	"flag"
 	"fmt"
 	"log"
@@ -12,20 +13,20 @@ import (
 	"syscall"
 	"time"
 
+	"grok_switch/internal/agentbridge"
 	"grok_switch/internal/autostart"
 	"grok_switch/internal/crash"
 	"grok_switch/internal/grokauth"
 	"grok_switch/internal/grokpool"
 	"grok_switch/internal/paths"
 	"grok_switch/internal/profiles"
+	"grok_switch/internal/remoteaccess"
 	"grok_switch/internal/server"
 	"grok_switch/internal/settings"
+	"grok_switch/internal/singleinstance"
 	"grok_switch/internal/switcher"
 	"grok_switch/internal/tray"
 )
-
-//go:embed ui/index.html ui/app.js ui/style.css icon.svg assets/icon.ico
-var assets embed.FS
 
 func main() {
 	defer crash.RecoverMainThread()
@@ -38,12 +39,33 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
+	// Initialize diagnostics before any directory setup so permission failures
+	// still produce a native error dialog and use the log whenever possible.
+	crash.Setup(resolved.LogFile)
 	if err := resolved.Ensure(); err != nil {
 		fatal(err)
 	}
-	// Open the crash log as early as possible so startup failures and any
-	// later stderr writes / panics are captured instead of vanishing.
-	crash.Setup(resolved.LogFile)
+
+	settingsStore := settings.NewStore(resolved.SettingsFile)
+	instanceLock, alreadyRunning, err := singleinstance.Acquire(resolved.DataDir)
+	if err != nil {
+		fatal(fmt.Errorf("创建单实例锁失败: %w", err))
+	}
+	if alreadyRunning {
+		url, findErr := waitForExistingInstanceURL(settingsStore, resolved.DataDir, 3*time.Second)
+		if findErr == nil {
+			if openErr := tray.OpenBrowser(url); openErr == nil {
+				return
+			} else {
+				crash.Logf("open existing instance failed: %v", openErr)
+			}
+		} else {
+			crash.Logf("find existing instance failed: %v", findErr)
+		}
+		crash.ShowInfo("grok_switch", "grok_switch 已经在运行，但未能自动打开管理页面。请使用系统托盘图标打开。")
+		return
+	}
+	defer instanceLock.Close()
 
 	exePath, err := os.Executable()
 	if err != nil {
@@ -52,7 +74,6 @@ func main() {
 	exePath, _ = filepath.Abs(exePath)
 
 	profileStore := profiles.NewStore(resolved.ProfilesFile)
-	settingsStore := settings.NewStore(resolved.SettingsFile)
 	grokAuthStore := grokauth.NewStore(resolved.GrokAuthFile)
 	grokPool, err := grokpool.NewManager(resolved.GrokPoolDir)
 	if err != nil {
@@ -86,16 +107,21 @@ func main() {
 	if err := autostart.Sync(currentSettings.Autostart, exePath, currentSettings.SilentAutostart); err != nil {
 		crash.Logf("autostart sync failed: %v", err)
 	}
+	agent := agentbridge.New(resolved.GrokHome, filepath.Join(resolved.DataDir, "agent.log"))
+	agent.SetDefaultCwd(currentSettings.AgentDefaultCwd)
+	defer agent.Stop()
 
 	appServer := &server.Server{
-		Paths:    resolved,
-		Profiles: profileStore,
-		Settings: settingsStore,
-		GrokAuth: grokAuthStore,
-		GrokPool: grokPool,
-		Switcher: sw,
-		Assets:   assets,
-		ExePath:  exePath,
+		Paths:        resolved,
+		Profiles:     profileStore,
+		Settings:     settingsStore,
+		RemoteAccess: remoteaccess.NewStore(resolved.RemoteAccessFile),
+		GrokAuth:     grokAuthStore,
+		GrokPool:     grokPool,
+		Switcher:     sw,
+		Agent:        agent,
+		Assets:       assets,
+		ExePath:      exePath,
 	}
 	httpServer, port, err := appServer.Listen(currentSettings.Port)
 	if err != nil {
@@ -150,6 +176,6 @@ func shutdown(srv interface{ Shutdown(context.Context) error }) {
 }
 
 func fatal(err error) {
-	fmt.Fprintln(os.Stderr, err)
+	crash.ReportFatal(err)
 	os.Exit(1)
 }
